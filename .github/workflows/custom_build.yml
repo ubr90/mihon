@@ -40,7 +40,7 @@ jobs:
       - name: Build APK
         run: |
           set -o pipefail
-          ./gradlew assembleRelease -Pdist=ci 2>&1 | tee build.log
+          ./gradlew assembleRelease -Pdist=ci -Pinclude-telemetry=false -Penable-updater=false 2>&1 | tee build.log
 
       - name: Report errors
         if: failure()
