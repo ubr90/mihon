@@ -173,6 +173,7 @@ class MangaViewModel(
     val chapterSwipeStartAction = libraryPreferences.swipeToEndAction.get()
     val chapterSwipeEndAction = libraryPreferences.swipeToStartAction.get()
     val chapterGridViewPref = libraryPreferences.chapterGridView
+    val chapterThumbnailRefreshedAtPref = libraryPreferences.chapterThumbnailRefreshedAt(mangaId)
     var autoTrackState = trackPreferences.autoUpdateTrackOnMarkRead.get()
 
     private val skipFiltered by readerPreferences.skipFiltered.asState(viewModelScope)
@@ -334,6 +335,9 @@ class MangaViewModel(
     }
 
     fun fetchAllFromSource(manualFetch: Boolean = true) {
+        if (manualFetch) {
+            chapterThumbnailRefreshedAtPref.set(System.currentTimeMillis())
+        }
         viewModelScope.launch {
             isRefreshingData.value = true
             fetchAllFromSource(

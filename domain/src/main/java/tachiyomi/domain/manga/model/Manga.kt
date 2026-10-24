@@ -107,7 +107,10 @@ data class Manga(
 
         const val CHAPTER_DISPLAY_NAME = 0x00000000L
         const val CHAPTER_DISPLAY_NUMBER = 0x00100000L
-        const val CHAPTER_DISPLAY_MASK = 0x00100000L
+
+        // Custom: file title only, e.g. "1 - 01권 (33.6 MiB)" -> "01권"
+        const val CHAPTER_DISPLAY_FILE_TITLE = 0x00200000L
+        const val CHAPTER_DISPLAY_MASK = 0x00300000L
 
         /**
          * [favoriteAt] of an entry added to the library before the time it was added was recorded.

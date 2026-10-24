@@ -89,6 +89,7 @@ import kotlin.time.Instant
 fun MangaScreen(
     state: MangaViewModel.State.Success,
     chapterGridView: Boolean,
+    chapterThumbnailRefreshedAt: Long,
     onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
     nextUpdate: Instant?,
@@ -148,6 +149,7 @@ fun MangaScreen(
         MangaScreenSmallImpl(
             state = state,
             chapterGridView = chapterGridView,
+            chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
             onToggleChapterGridView = onToggleChapterGridView,
             snackbarHostState = snackbarHostState,
             nextUpdate = nextUpdate,
@@ -187,6 +189,7 @@ fun MangaScreen(
         MangaScreenLargeImpl(
             state = state,
             chapterGridView = chapterGridView,
+            chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
             onToggleChapterGridView = onToggleChapterGridView,
             snackbarHostState = snackbarHostState,
             chapterSwipeStartAction = chapterSwipeStartAction,
@@ -229,6 +232,7 @@ fun MangaScreen(
 private fun MangaScreenSmallImpl(
     state: MangaViewModel.State.Success,
     chapterGridView: Boolean,
+    chapterThumbnailRefreshedAt: Long,
     onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
     nextUpdate: Instant?,
@@ -452,6 +456,7 @@ private fun MangaScreenSmallImpl(
                         chapters = listItem,
                         thumbnailBaseUrl = thumbnailBaseUrl,
                         showAsGrid = chapterGridView && hasChapterThumbnails,
+                        thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                         isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                         chapterSwipeStartAction = chapterSwipeStartAction,
                         chapterSwipeEndAction = chapterSwipeEndAction,
@@ -471,6 +476,7 @@ private fun MangaScreenSmallImpl(
 fun MangaScreenLargeImpl(
     state: MangaViewModel.State.Success,
     chapterGridView: Boolean,
+    chapterThumbnailRefreshedAt: Long,
     onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
     nextUpdate: Instant?,
@@ -687,6 +693,7 @@ fun MangaScreenLargeImpl(
                                 chapters = listItem,
                                 thumbnailBaseUrl = thumbnailBaseUrl,
                                 showAsGrid = chapterGridView && hasChapterThumbnails,
+                                thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                                 isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                                 chapterSwipeStartAction = chapterSwipeStartAction,
                                 chapterSwipeEndAction = chapterSwipeEndAction,
@@ -751,6 +758,7 @@ private fun LazyListScope.sharedChapterItems(
     chapters: List<ChapterList>,
     thumbnailBaseUrl: String?,
     showAsGrid: Boolean,
+    thumbnailRefreshedAt: Long,
     isAnyChapterSelected: Boolean,
     chapterSwipeStartAction: LibraryPreferences.ChapterSwipeAction,
     chapterSwipeEndAction: LibraryPreferences.ChapterSwipeAction,
@@ -765,6 +773,7 @@ private fun LazyListScope.sharedChapterItems(
             manga = manga,
             chapters = chapters,
             thumbnailBaseUrl = thumbnailBaseUrl,
+            thumbnailRefreshedAt = thumbnailRefreshedAt,
             isAnyChapterSelected = isAnyChapterSelected,
             onChapterClicked = onChapterClicked,
             onChapterSelected = onChapterSelected,
@@ -789,14 +798,7 @@ private fun LazyListScope.sharedChapterItems(
             }
             is ChapterList.Item -> {
                 MangaChapterListItem(
-                    title = if (manga.displayMode == Manga.CHAPTER_DISPLAY_NUMBER) {
-                        stringResource(
-                            MR.strings.display_mode_chapter,
-                            formatChapterNumber(item.chapter.chapterNumber),
-                        )
-                    } else {
-                        item.chapter.name
-                    },
+                    title = chapterDisplayTitle(manga, item.chapter),
                     date = relativeDateText(item.chapter.dateUpload),
                     readProgress = item.chapter.lastPageRead
                         .takeIf { !item.chapter.read && it > 0L }
@@ -848,6 +850,7 @@ private fun LazyListScope.sharedChapterGridItems(
     manga: Manga,
     chapters: List<ChapterList>,
     thumbnailBaseUrl: String?,
+    thumbnailRefreshedAt: Long,
     isAnyChapterSelected: Boolean,
     onChapterClicked: (Chapter) -> Unit,
     onChapterSelected: (ChapterList.Item, Boolean, Boolean) -> Unit,
@@ -868,21 +871,16 @@ private fun LazyListScope.sharedChapterGridItems(
             row.forEach { item ->
                 val chapter = item.chapter
                 MangaChapterGridItem(
-                    title = if (manga.displayMode == Manga.CHAPTER_DISPLAY_NUMBER) {
-                        stringResource(
-                            MR.strings.display_mode_chapter,
-                            formatChapterNumber(chapter.chapterNumber),
-                        )
-                    } else {
-                        chapter.name
-                    },
+                    title = chapterDisplayTitle(manga, chapter),
                     coverData = chapterThumbnailUrl(chapter.url, thumbnailBaseUrl)?.let { url ->
                         MangaCover(
                             mangaId = manga.id,
                             sourceId = manga.source,
                             isMangaFavorite = false,
                             url = url,
-                            lastModified = null,
+                            lastModified = thumbnailRefreshedAt
+                                .takeIf { it > 0L }
+                                ?.let { Instant.fromEpochMilliseconds(it) },
                         )
                     } ?: manga,
                     readProgress = chapter.lastPageRead
@@ -912,6 +910,27 @@ private fun LazyListScope.sharedChapterGridItems(
                 Spacer(modifier = Modifier.weight(1f))
             }
         }
+    }
+}
+
+private val ChapterNumberPrefixRegex = Regex("""^\s*[\d.]+\s+-\s+""")
+private val ChapterSizeSuffixRegex = Regex("""\s*\(\s*[\d.,]+\s*[KMGT]?i?B\s*\)\s*$""", RegexOption.IGNORE_CASE)
+
+// Custom: "1 - 01권 (33.6 MiB)" -> "01권"
+private fun chapterFileTitle(name: String): String {
+    val stripped = name.replace(ChapterNumberPrefixRegex, "").replace(ChapterSizeSuffixRegex, "").trim()
+    return stripped.ifEmpty { name }
+}
+
+@Composable
+private fun chapterDisplayTitle(manga: Manga, chapter: Chapter): String {
+    return when (manga.displayMode) {
+        Manga.CHAPTER_DISPLAY_NUMBER -> stringResource(
+            MR.strings.display_mode_chapter,
+            formatChapterNumber(chapter.chapterNumber),
+        )
+        Manga.CHAPTER_DISPLAY_FILE_TITLE -> chapterFileTitle(chapter.name)
+        else -> chapter.name
     }
 }
 

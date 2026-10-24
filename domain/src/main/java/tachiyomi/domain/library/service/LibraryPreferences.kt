@@ -169,17 +169,17 @@ class LibraryPreferences(
     // and upload date
     val sortChapterBySourceOrNumber: Preference<Long> = preferenceStore.getLong(
         "default_chapter_sort_by_source_or_number",
-        Manga.CHAPTER_SORTING_SOURCE,
+        Manga.CHAPTER_SORTING_NUMBER,
     )
 
     val displayChapterByNameOrNumber: Preference<Long> = preferenceStore.getLong(
         "default_chapter_display_by_name_or_number",
-        Manga.CHAPTER_DISPLAY_NAME,
+        Manga.CHAPTER_DISPLAY_FILE_TITLE,
     )
 
     val sortChapterByAscendingOrDescending: Preference<Long> = preferenceStore.getLong(
         "default_chapter_sort_by_ascending_or_descending",
-        Manga.CHAPTER_SORT_DESC,
+        Manga.CHAPTER_SORT_ASC,
     )
 
     fun setChapterSettingsDefault(manga: Manga) {
@@ -215,6 +215,10 @@ class LibraryPreferences(
 
     // Custom: show chapters (volumes) as a cover grid when the source provides per-chapter thumbnails (Komga)
     val chapterGridView: Preference<Boolean> = preferenceStore.getBoolean("pref_chapter_grid_view", true)
+
+    // Custom: last manual refresh per manga, used to bust cached chapter thumbnails
+    fun chapterThumbnailRefreshedAt(mangaId: Long): Preference<Long> =
+        preferenceStore.getLong("pref_chapter_thumb_refresh_$mangaId", 0L)
 
     val updateMangaTitles: Preference<Boolean> = preferenceStore.getBoolean("pref_update_library_manga_titles", false)
 

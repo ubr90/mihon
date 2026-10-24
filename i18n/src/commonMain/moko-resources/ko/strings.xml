@@ -171,6 +171,7 @@
     <string name="chapter_error">오류</string>
     <string name="chapter_paused">일시정지</string>
     <string name="show_chapter_number">회차 번호</string>
+    <string name="show_file_title">제목만</string>
     <string name="sort_by_source">소스 기준</string>
     <string name="sort_by_number">회차 번호 기준</string>
     <string name="manga_download">다운로드</string>

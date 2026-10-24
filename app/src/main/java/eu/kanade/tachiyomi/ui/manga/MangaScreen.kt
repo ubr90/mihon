@@ -107,10 +107,12 @@ class MangaScreen(
         }
 
         val chapterGridView by viewModel.chapterGridViewPref.collectAsState()
+        val chapterThumbnailRefreshedAt by viewModel.chapterThumbnailRefreshedAtPref.collectAsState()
 
         MangaScreen(
             state = successState,
             chapterGridView = chapterGridView,
+            chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
             onToggleChapterGridView = { viewModel.chapterGridViewPref.set(!chapterGridView) },
             snackbarHostState = viewModel.snackbarHostState,
             nextUpdate = successState.manga.expectedNextUpdate,
