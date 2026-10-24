@@ -323,9 +323,10 @@ class ReaderActivity : BaseActivity() {
             is ReaderViewModel.Dialog.PageActions -> {
                 if (viewModel.manga?.source == mihon.feature.nas.NasSource.SOURCE_ID) {
                     // Custom: NAS archives get their own menu (folder thumbnail, table of contents)
+                    val actionPage = (state.dialog as ReaderViewModel.Dialog.PageActions).page
                     mihon.feature.nas.NasPageActionsDialog(
-                        page = state.dialog.page,
-                        zipPath = state.dialog.page.chapter.chapter.url,
+                        page = actionPage,
+                        zipPath = actionPage.chapter.chapter.url,
                         onDismissRequest = onDismissRequest,
                         onMoveToPage = ::moveToPageIndex,
                     )
