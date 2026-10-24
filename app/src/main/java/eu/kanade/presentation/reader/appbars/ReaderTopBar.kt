@@ -23,6 +23,7 @@ fun ReaderTopBar(
     onShare: (() -> Unit)?,
     modifier: Modifier = Modifier,
     onSetAsCover: (() -> Unit)? = null,
+    onSetAsTocCover: (() -> Unit)? = null,
 ) {
     AppBar(
         modifier = modifier,
@@ -52,6 +53,9 @@ fun ReaderTopBar(
                     )
                     onSetAsCover?.let {
                         add(AppBar.OverflowAction(title = "표지로 설정", onClick = it))
+                    }
+                    onSetAsTocCover?.let {
+                        add(AppBar.OverflowAction(title = "이 목차의 표지로 설정", onClick = it))
                     }
                     onOpenInWebView?.let {
                         add(

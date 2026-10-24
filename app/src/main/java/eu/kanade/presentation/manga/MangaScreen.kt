@@ -910,11 +910,11 @@ private fun MangaTwoPanelBox(
 
 @Composable
 private fun rememberChapterCoverGridConfig(gridOnly: Boolean): ChapterCoverGridConfig? {
-    val mode by CoverGridSettings.aspectMode.collectAsState()
-    val spacing by CoverGridSettings.spacing.collectAsState()
-    val rowHeight by CoverGridSettings.rowHeight.collectAsState()
-    val savedColumns by CoverGridSettings.chapterColumns.collectAsState()
-    val nameMode by CoverGridSettings.nameMode.collectAsState()
+    val mode by CoverGridSettings.chapter.aspectMode.collectAsState()
+    val spacing by CoverGridSettings.chapter.spacing.collectAsState()
+    val rowHeight by CoverGridSettings.chapter.rowHeight.collectAsState()
+    val savedColumns by CoverGridSettings.chapter.columns.collectAsState()
+    val nameMode by CoverGridSettings.chapter.nameMode.collectAsState()
     val width = LocalConfiguration.current.screenWidthDp
     if (!gridOnly) return null
     return ChapterCoverGridConfig(
@@ -931,9 +931,9 @@ private fun Modifier.chapterGridPinch(config: ChapterCoverGridConfig?): Modifier
     if (config == null) return this
     return pinchSteps(config) { bigger ->
         if (config.mode == CoverGridSettings.MODE_JUSTIFIED) {
-            CoverGridSettings.setRowHeight(CoverGridSettings.stepRowHeight(CoverGridSettings.rowHeight.value, bigger))
+            CoverGridSettings.chapter.setRowHeight(CoverGridSettings.stepRowHeight(CoverGridSettings.chapter.rowHeight.value, bigger))
         } else {
-            CoverGridSettings.setChapterColumns(CoverGridSettings.stepColumns(config.columns, bigger))
+            CoverGridSettings.chapter.setColumns(CoverGridSettings.stepColumns(config.columns, bigger))
         }
     }
 }

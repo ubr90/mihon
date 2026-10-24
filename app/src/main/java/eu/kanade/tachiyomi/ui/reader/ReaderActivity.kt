@@ -484,6 +484,7 @@ class ReaderActivity : BaseActivity() {
             onOpenInBrowser = ::openChapterInBrowser.takeIf { isHttpSource && !isNas },
             onShare = ::shareChapter.takeIf { isHttpSource && !isNas },
             onSetAsCover = { setNasFolderCover(state) }.takeIf { isNas },
+            onSetAsTocCover = { setNasTocCover(state) }.takeIf { isNas },
 
             chapterNavigatorType = if (!verticalNavigator) {
                 if (state.viewer is R2LPagerViewer || (state.viewer as? WebGpuViewer)?.isReversed ?: false) {
@@ -682,6 +683,27 @@ class ReaderActivity : BaseActivity() {
                 }.isSuccess
             }
             toast(if (ok) "폴더 썸네일로 지정했어요" else "지정하지 못했어요")
+        }
+    }
+
+    // Custom: NAS — current page becomes the thumbnail of the table-of-contents entry it belongs to
+    private fun setNasTocCover(state: ReaderViewModel.State) {
+        val chapter = state.currentChapter ?: return
+        val page = chapter.pages?.getOrNull(state.currentPage - 1) ?: return
+        val zipPath = chapter.chapter.url
+        lifecycleScope.launch {
+            val message = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val runtime = mihon.feature.nas.NasRuntime
+                    val zip = mihon.feature.nas.RemoteZip.open(runtime.dav, zipPath)
+                    val toc = mihon.feature.nas.buildToc(zip.pages(runtime.settings.thumbName).map { it.name })
+                    val entry = toc.lastOrNull { it.pageIndex <= page.index } ?: return@runCatching "목차가 없어요"
+                    val bytes = page.stream?.invoke()?.use { it.readBytes() } ?: error("no image")
+                    runtime.thumbs.put(mihon.feature.nas.tocThumbPath(zipPath, entry), folder = false, imageBytes = bytes)
+                    "'${entry.name}' 목차 표지로 지정했어요"
+                }.getOrElse { "지정하지 못했어요" }
+            }
+            toast(message)
         }
     }
 

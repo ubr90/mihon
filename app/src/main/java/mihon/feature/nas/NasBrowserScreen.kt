@@ -88,6 +88,7 @@ import mihon.icons.materialsymbols.rounded.Book
 import mihon.icons.materialsymbols.rounded.Code
 import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.Settings
+import mihon.icons.materialsymbols.rounded.Storage
 import mihon.feature.grid.CoverGridOptionsDialog
 import mihon.feature.grid.CoverGridSettings
 import mihon.feature.grid.coverGridItems
@@ -105,7 +106,7 @@ import java.io.File
  * Custom: NAS (WebDAV) folder browser. Folders and zip/cbz archives are shown as tiles;
  * tapping an archive opens it in the reader.
  */
-class NasBrowserScreen : Screen() {
+class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
 
     @Composable
     override fun Content() {
@@ -128,16 +129,17 @@ class NasBrowserScreen : Screen() {
 
         BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
 
-        val nameMode by CoverGridSettings.nameMode.collectAsState()
+        val nameMode by CoverGridSettings.nas.nameMode.collectAsState()
         var gridOptions by remember { mutableStateOf(false) }
-        if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
+        if (gridOptions) CoverGridOptionsDialog(profile = CoverGridSettings.nas, onDismiss = { gridOptions = false })
         NasBrowserContent(
             state = state,
             thumbVersion = thumbVersion,
             nameMode = nameMode,
-            onCycleNames = { CoverGridSettings.cycleNameMode() },
+            onCycleNames = { CoverGridSettings.nas.cycleNameMode() },
             onGridOptions = { gridOptions = true },
-            onBack = { if (state.stack.size > 1) viewModel.goUp() else navigator.pop() },
+            showBack = !inTab || state.stack.size > 1,
+            onBack = { if (state.stack.size > 1) viewModel.goUp() else if (!inTab) navigator.pop() },
             onRefresh = viewModel::reload,
             onOpenSettings = { viewModel.showSettings(true) },
             onOpen = viewModel::open,
@@ -401,6 +403,7 @@ private fun NasBrowserContent(
     nameMode: Int,
     onCycleNames: () -> Unit,
     onGridOptions: () -> Unit,
+    showBack: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -418,8 +421,10 @@ private fun NasBrowserContent(
                     )
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(MaterialSymbols.AutoMirroredRounded.ArrowBack, contentDescription = null)
+                    if (showBack) {
+                        IconButton(onClick = onBack) {
+                            Icon(MaterialSymbols.AutoMirroredRounded.ArrowBack, contentDescription = null)
+                        }
                     }
                 },
                 actions = {
@@ -467,10 +472,10 @@ private fun NasBrowserContent(
                     modifier = Modifier.align(Alignment.Center),
                 ) { Text("NAS 설정하기") }
                 else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val mode by CoverGridSettings.aspectMode.collectAsState()
-                    val spacing by CoverGridSettings.spacing.collectAsState()
-                    val rowHeight by CoverGridSettings.rowHeight.collectAsState()
-                    val savedColumns by CoverGridSettings.nasColumns.collectAsState()
+                    val mode by CoverGridSettings.nas.aspectMode.collectAsState()
+                    val spacing by CoverGridSettings.nas.spacing.collectAsState()
+                    val rowHeight by CoverGridSettings.nas.rowHeight.collectAsState()
+                    val savedColumns by CoverGridSettings.nas.columns.collectAsState()
                     val columns = CoverGridSettings.columnsOrDefault(savedColumns, maxWidth.value)
                     val anyThumb = remember(state.entries, thumbVersion) {
                         state.entries.any { NasRuntime.thumbs.has(it.path, folder = it.isDirectory) }
@@ -481,11 +486,11 @@ private fun NasBrowserContent(
                             .fillMaxSize()
                             .pinchSteps(columns to layoutMode) { bigger ->
                                 if (layoutMode == CoverGridSettings.MODE_JUSTIFIED) {
-                                    CoverGridSettings.setRowHeight(
-                                        CoverGridSettings.stepRowHeight(CoverGridSettings.rowHeight.value, bigger),
+                                    CoverGridSettings.nas.setRowHeight(
+                                        CoverGridSettings.stepRowHeight(CoverGridSettings.nas.rowHeight.value, bigger),
                                     )
                                 } else {
-                                    CoverGridSettings.setNasColumns(CoverGridSettings.stepColumns(columns, bigger))
+                                    CoverGridSettings.nas.setColumns(CoverGridSettings.stepColumns(columns, bigger))
                                 }
                             },
                         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
@@ -740,4 +745,25 @@ private fun nasThumbAspect(entry: NasEntry): Float? {
     val ratio = opts.outWidth.toFloat() / opts.outHeight
     nasAspects[key] = ratio
     return ratio
+}
+
+/**
+ * Custom: NAS browser as a main tab (placed before the library).
+ */
+data object NasTab : eu.kanade.presentation.util.Tab {
+
+    private val screen = NasBrowserScreen(inTab = true)
+
+    override val options: cafe.adriel.voyager.navigator.tab.TabOptions
+        @Composable
+        get() = cafe.adriel.voyager.navigator.tab.TabOptions(
+            index = 5u,
+            title = "NAS",
+            icon = androidx.compose.ui.graphics.vector.rememberVectorPainter(MaterialSymbols.Rounded.Storage),
+        )
+
+    @Composable
+    override fun Content() {
+        screen.Content()
+    }
 }

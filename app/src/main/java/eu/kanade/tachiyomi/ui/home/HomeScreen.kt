@@ -64,6 +64,7 @@ object HomeScreen : Screen() {
     private const val TabNavigatorKey = "HomeTabs"
 
     private val TABS = listOf(
+        mihon.feature.nas.NasTab,
         LibraryTab,
         UpdatesTab,
         HistoryTab,

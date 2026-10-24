@@ -60,32 +60,22 @@ object CoverGridSettings {
     const val MAX_COLUMNS = 12
 
     private val app: Application by injectLazy()
-    private val prefs by lazy { app.getSharedPreferences("cover_grid", Context.MODE_PRIVATE) }
+    internal val prefs by lazy { app.getSharedPreferences("cover_grid", Context.MODE_PRIVATE) }
 
-    val aspectMode by lazy { MutableStateFlow(prefs.getInt("aspect", MODE_2_3)) }
-    val spacing by lazy { MutableStateFlow(prefs.getInt("spacing", 8)) }
-    val nameMode by lazy { MutableStateFlow(prefs.getInt("name_mode", NAME_SHOW)) }
-    val rowHeight by lazy { MutableStateFlow(prefs.getInt("row_height", 200)) }
-    val nasColumns by lazy { MutableStateFlow(prefs.getInt("nas_columns", 0)) }
-    val chapterColumns by lazy { MutableStateFlow(prefs.getInt("chapter_columns", 0)) }
+    /** Separate look for the NAS browser and the Komga "grid only" chapter view. */
+    val nas by lazy { CoverGridProfile("nas", prefs) }
+    val chapter by lazy { CoverGridProfile("chapter", prefs) }
+
     val tocGrid by lazy { MutableStateFlow(prefs.getBoolean("toc_grid", true)) }
     val tocColumns by lazy { MutableStateFlow(prefs.getInt("toc_columns", 0)) }
     fun setTocGrid(v: Boolean) { tocGrid.value = v; prefs.edit { putBoolean("toc_grid", v) } }
     fun setTocColumns(v: Int) { tocColumns.value = v; prefs.edit { putInt("toc_columns", v) } }
-
-    fun setAspectMode(v: Int) { aspectMode.value = v; prefs.edit { putInt("aspect", v) } }
-    fun setSpacing(v: Int) { spacing.value = v; prefs.edit { putInt("spacing", v) } }
-    fun setNameMode(v: Int) { nameMode.value = v; prefs.edit { putInt("name_mode", v) } }
-    fun cycleNameMode() = setNameMode((nameMode.value + 1) % 3)
 
     private val bracketRegex = Regex("""\s*\[[^\]]*\]\s*""")
 
     /** Removes [bracket] parts from a name; keeps the original when nothing would be left. */
     fun stripBrackets(name: String): String =
         name.replace(bracketRegex, " ").replace(Regex("""\s+"""), " ").trim().ifEmpty { name }
-    fun setRowHeight(v: Int) { rowHeight.value = v; prefs.edit { putInt("row_height", v) } }
-    fun setNasColumns(v: Int) { nasColumns.value = v; prefs.edit { putInt("nas_columns", v) } }
-    fun setChapterColumns(v: Int) { chapterColumns.value = v; prefs.edit { putInt("chapter_columns", v) } }
 
     /** Saved column count, or a default based on the width when never set. */
     fun columnsOrDefault(saved: Int, widthDp: Float): Int =
@@ -108,6 +98,29 @@ object CoverGridSettings {
         MODE_AUTO_ROW -> "자동 (세로길이맞춤)"
         else -> "높이 통일 · 너비 자유"
     }
+}
+
+/**
+ * One set of grid view settings. Values saved before the split (shared keys) are used as the
+ * starting point for both profiles.
+ */
+class CoverGridProfile(private val id: String, private val prefs: android.content.SharedPreferences) {
+    private fun key(name: String) = "${id}_$name"
+    private fun int(name: String, legacy: String, default: Int) =
+        prefs.getInt(key(name), prefs.getInt(legacy, default))
+
+    val aspectMode = MutableStateFlow(int("aspect", "aspect", CoverGridSettings.MODE_2_3))
+    val spacing = MutableStateFlow(int("spacing", "spacing", 8))
+    val nameMode = MutableStateFlow(int("name_mode", "name_mode", CoverGridSettings.NAME_SHOW))
+    val rowHeight = MutableStateFlow(int("row_height", "row_height", 200))
+    val columns = MutableStateFlow(int("columns", "${id}_columns", 0))
+
+    fun setAspectMode(v: Int) { aspectMode.value = v; prefs.edit { putInt(key("aspect"), v) } }
+    fun setSpacing(v: Int) { spacing.value = v; prefs.edit { putInt(key("spacing"), v) } }
+    fun setNameMode(v: Int) { nameMode.value = v; prefs.edit { putInt(key("name_mode"), v) } }
+    fun cycleNameMode() = setNameMode((nameMode.value + 1) % 3)
+    fun setRowHeight(v: Int) { rowHeight.value = v; prefs.edit { putInt(key("row_height"), v) } }
+    fun setColumns(v: Int) { columns.value = v; prefs.edit { putInt(key("columns"), v) } }
 }
 
 /** Known image aspect ratios (width / height) of thumbnails that were loaded, by key. */
@@ -266,9 +279,9 @@ fun justifiedRows(ratios: List<Float>, width: Float, targetHeight: Float, spacin
 }
 
 @Composable
-fun CoverGridOptionsDialog(onDismiss: () -> Unit) {
-    val mode by CoverGridSettings.aspectMode.collectAsState()
-    val spacing by CoverGridSettings.spacing.collectAsState()
+fun CoverGridOptionsDialog(profile: CoverGridProfile, onDismiss: () -> Unit) {
+    val mode by profile.aspectMode.collectAsState()
+    val spacing by profile.spacing.collectAsState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("그리드 보기") },
@@ -283,7 +296,7 @@ fun CoverGridOptionsDialog(onDismiss: () -> Unit) {
                     CoverGridSettings.MODE_JUSTIFIED,
                 ).forEach { m ->
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = mode == m, onClick = { CoverGridSettings.setAspectMode(m) })
+                        RadioButton(selected = mode == m, onClick = { profile.setAspectMode(m) })
                         Text(CoverGridSettings.modeName(m))
                     }
                 }
@@ -294,7 +307,7 @@ fun CoverGridOptionsDialog(onDismiss: () -> Unit) {
                 )
                 Slider(
                     value = spacing.toFloat(),
-                    onValueChange = { CoverGridSettings.setSpacing(it.toInt()) },
+                    onValueChange = { profile.setSpacing(it.toInt()) },
                     valueRange = 0f..24f,
                     steps = 23,
                 )

@@ -47,7 +47,7 @@ fun ChapterHeader(
     nameMode: Int? = null,
 ) {
     var gridOptions by remember { mutableStateOf(false) }
-    if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
+    if (gridOptions) CoverGridOptionsDialog(profile = CoverGridSettings.chapter, onDismiss = { gridOptions = false })
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -66,7 +66,7 @@ fun ChapterHeader(
         }
         if (nameMode != null) {
             // Custom: grid-only mode controls (shared with the NAS browser)
-            IconButton(onClick = { CoverGridSettings.cycleNameMode() }, enabled = enabled) {
+            IconButton(onClick = { CoverGridSettings.chapter.cycleNameMode() }, enabled = enabled) {
                 Icon(
                     imageVector = when (nameMode) {
                         CoverGridSettings.NAME_SHOW -> MaterialSymbols.RoundedFilled.Visibility

@@ -34,7 +34,6 @@ fun MoreScreen(
     incognitoMode: Boolean,
     onIncognitoModeChange: (Boolean) -> Unit,
     onClickDownloadQueue: () -> Unit,
-    onClickNas: () -> Unit,
     onClickCategories: () -> Unit,
     onClickStats: () -> Unit,
     onClickDataAndStorage: () -> Unit,
@@ -99,14 +98,6 @@ fun MoreScreen(
                     },
                     icon = MaterialSymbols.Rounded.Download,
                     onPreferenceClick = onClickDownloadQueue,
-                )
-            }
-            item {
-                // Custom: NAS (WebDAV) folder browser
-                TextPreferenceWidget(
-                    title = "NAS 폴더",
-                    icon = MaterialSymbols.Rounded.Storage,
-                    onPreferenceClick = onClickNas,
                 )
             }
             item {

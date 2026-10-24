@@ -56,6 +56,7 @@ fun ReaderAppBars(
     onOpenInBrowser: (() -> Unit)?,
     onShare: (() -> Unit)?,
     onSetAsCover: (() -> Unit)? = null,
+    onSetAsTocCover: (() -> Unit)? = null,
 
     chapterNavigatorType: ChapterNavigatorType,
     verticalNavigatorHeight: Float,
@@ -99,6 +100,7 @@ fun ReaderAppBars(
                 onOpenInBrowser = onOpenInBrowser,
                 onShare = onShare,
                 onSetAsCover = onSetAsCover,
+                onSetAsTocCover = onSetAsTocCover,
             )
         }
 
