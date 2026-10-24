@@ -39,6 +39,11 @@ class NasSettings(context: Context) {
         get() = prefs.getString(KEY_BACKUP, "").orEmpty()
         set(value) = prefs.edit { putString(KEY_BACKUP, if (value.isBlank()) "" else normalizePath(value)) }
 
+    /** Longest side of generated thumbnails in pixels. */
+    var thumbSize: Int
+        get() = prefs.getInt(KEY_THUMB_SIZE, 700)
+        set(value) = prefs.edit { putInt(KEY_THUMB_SIZE, value) }
+
     val isConfigured: Boolean
         get() = serverUrl.startsWith("http://") || serverUrl.startsWith("https://")
 
@@ -49,6 +54,7 @@ class NasSettings(context: Context) {
         private const val KEY_ROOT = "root"
         private const val KEY_THUMB_NAME = "thumb_name"
         private const val KEY_BACKUP = "backup"
+        private const val KEY_THUMB_SIZE = "thumb_size"
         const val DEFAULT_THUMB_NAME = "_thumb.jpg"
 
         fun normalizePath(path: String): String {

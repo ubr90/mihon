@@ -23,6 +23,7 @@ import mihon.feature.grid.CoverGridOptionsDialog
 import mihon.feature.grid.CoverGridSettings
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredroundedfilled.ViewList
+import mihon.icons.materialsymbols.rounded.Code
 import mihon.icons.materialsymbols.rounded.Settings
 import mihon.icons.materialsymbols.roundedfilled.ViewCompact
 import mihon.icons.materialsymbols.roundedfilled.ViewModule
@@ -43,7 +44,7 @@ fun ChapterHeader(
     modifier: Modifier = Modifier,
     viewMode: Int? = null,
     onToggleGridView: (() -> Unit)? = null,
-    showNames: Boolean? = null,
+    nameMode: Int? = null,
 ) {
     var gridOptions by remember { mutableStateOf(false) }
     if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
@@ -63,14 +64,14 @@ fun ChapterHeader(
         ) {
             ChapterHeaderText(chapterCount, missingChapterCount)
         }
-        if (showNames != null) {
+        if (nameMode != null) {
             // Custom: grid-only mode controls (shared with the NAS browser)
-            IconButton(onClick = { CoverGridSettings.setShowNames(!showNames) }, enabled = enabled) {
+            IconButton(onClick = { CoverGridSettings.cycleNameMode() }, enabled = enabled) {
                 Icon(
-                    imageVector = if (showNames) {
-                        MaterialSymbols.RoundedFilled.Visibility
-                    } else {
-                        MaterialSymbols.RoundedFilled.VisibilityOff
+                    imageVector = when (nameMode) {
+                        CoverGridSettings.NAME_SHOW -> MaterialSymbols.RoundedFilled.Visibility
+                        CoverGridSettings.NAME_HIDE -> MaterialSymbols.RoundedFilled.VisibilityOff
+                        else -> MaterialSymbols.Rounded.Code
                     },
                     contentDescription = null,
                 )

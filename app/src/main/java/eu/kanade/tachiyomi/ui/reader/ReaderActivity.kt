@@ -321,12 +321,22 @@ class ReaderActivity : BaseActivity() {
                 )
             }
             is ReaderViewModel.Dialog.PageActions -> {
-                ReaderPageActionsDialog(
-                    onDismissRequest = onDismissRequest,
-                    onSetAsCover = viewModel::setAsCover,
-                    onShare = viewModel::shareImage,
-                    onSave = viewModel::saveImage,
-                )
+                if (viewModel.manga?.source == mihon.feature.nas.NasSource.SOURCE_ID) {
+                    // Custom: NAS archives get their own menu (folder thumbnail, table of contents)
+                    mihon.feature.nas.NasPageActionsDialog(
+                        page = state.dialog.page,
+                        zipPath = state.dialog.page.chapter.chapter.url,
+                        onDismissRequest = onDismissRequest,
+                        onMoveToPage = ::moveToPageIndex,
+                    )
+                } else {
+                    ReaderPageActionsDialog(
+                        onDismissRequest = onDismissRequest,
+                        onSetAsCover = viewModel::setAsCover,
+                        onShare = viewModel::shareImage,
+                        onSave = viewModel::saveImage,
+                    )
+                }
             }
             null -> {}
         }

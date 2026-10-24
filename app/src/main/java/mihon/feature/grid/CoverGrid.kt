@@ -45,6 +45,14 @@ object CoverGridSettings {
     const val MODE_AUTO_ROW = 3
     const val MODE_JUSTIFIED = 4
 
+    /** Internal: square tiles, used when a screen has no thumbnails at all. */
+    const val MODE_SQUARE = 100
+
+    // Name display: show / hide / hide [bracket] parts (folders only)
+    const val NAME_SHOW = 0
+    const val NAME_HIDE = 1
+    const val NAME_NO_BRACKETS = 2
+
     const val RATIO_2_3 = 2f / 3f
     const val RATIO_A4 = 1f / 1.414f
 
@@ -56,14 +64,21 @@ object CoverGridSettings {
 
     val aspectMode by lazy { MutableStateFlow(prefs.getInt("aspect", MODE_2_3)) }
     val spacing by lazy { MutableStateFlow(prefs.getInt("spacing", 8)) }
-    val showNames by lazy { MutableStateFlow(prefs.getBoolean("names", true)) }
+    val nameMode by lazy { MutableStateFlow(prefs.getInt("name_mode", NAME_SHOW)) }
     val rowHeight by lazy { MutableStateFlow(prefs.getInt("row_height", 200)) }
     val nasColumns by lazy { MutableStateFlow(prefs.getInt("nas_columns", 0)) }
     val chapterColumns by lazy { MutableStateFlow(prefs.getInt("chapter_columns", 0)) }
 
     fun setAspectMode(v: Int) { aspectMode.value = v; prefs.edit { putInt("aspect", v) } }
     fun setSpacing(v: Int) { spacing.value = v; prefs.edit { putInt("spacing", v) } }
-    fun setShowNames(v: Boolean) { showNames.value = v; prefs.edit { putBoolean("names", v) } }
+    fun setNameMode(v: Int) { nameMode.value = v; prefs.edit { putInt("name_mode", v) } }
+    fun cycleNameMode() = setNameMode((nameMode.value + 1) % 3)
+
+    private val bracketRegex = Regex("""\s*\[[^\]]*\]\s*""")
+
+    /** Removes [bracket] parts from a name; keeps the original when nothing would be left. */
+    fun stripBrackets(name: String): String =
+        name.replace(bracketRegex, " ").replace(Regex("""\s+"""), " ").trim().ifEmpty { name }
     fun setRowHeight(v: Int) { rowHeight.value = v; prefs.edit { putInt("row_height", v) } }
     fun setNasColumns(v: Int) { nasColumns.value = v; prefs.edit { putInt("nas_columns", v) } }
     fun setChapterColumns(v: Int) { chapterColumns.value = v; prefs.edit { putInt("chapter_columns", v) } }
@@ -155,6 +170,7 @@ fun <T> LazyListScope.coverGridItems(
     val fixed = when (mode) {
         CoverGridSettings.MODE_2_3 -> CoverGridSettings.RATIO_2_3
         CoverGridSettings.MODE_A4 -> CoverGridSettings.RATIO_A4
+        CoverGridSettings.MODE_SQUARE -> 1f
         else -> null
     }
     fun ratio(item: T) = fixed ?: aspectOf(item) ?: CoverGridSettings.RATIO_A4
@@ -223,6 +239,7 @@ fun <T> LazyListScope.coverGridItems(
 fun justifiedRows(ratios: List<Float>, width: Float, targetHeight: Float, spacing: Float): List<Pair<IntRange, Float>> {
     val result = mutableListOf<Pair<IntRange, Float>>()
     var start = 0
+    var prevHeight = targetHeight
     while (start < ratios.size) {
         var end = start
         var sum = 0f
@@ -235,9 +252,10 @@ fun justifiedRows(ratios: List<Float>, width: Float, targetHeight: Float, spacin
         }
         val gaps = spacing * (end - start - 1)
         val fitHeight = (width - gaps) / sum
-        // Last row keeps the target height instead of stretching
-        val height = if (end >= ratios.size && fitHeight > targetHeight) targetHeight else fitHeight
+        // Last row uses the previous row's height (not stretched), unless that would overflow
+        val height = if (end >= ratios.size && fitHeight > prevHeight) prevHeight else fitHeight
         result += (start until end) to height
+        prevHeight = height
         start = end
     }
     return result

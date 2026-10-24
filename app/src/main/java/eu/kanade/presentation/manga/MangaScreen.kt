@@ -471,7 +471,7 @@ private fun MangaScreenSmallImpl(
                             missingChapterCount = state.missingChapterCount,
                             onClick = onFilterClicked,
                             viewMode = headerViewMode,
-                            showNames = coverConfig?.showNames,
+                            nameMode = coverConfig?.nameMode,
                             onToggleGridView = onToggleChapterGridView,
                         )
                     }
@@ -721,7 +721,7 @@ fun MangaScreenLargeImpl(
                                     missingChapterCount = state.missingChapterCount,
                                     onClick = onFilterButtonClicked,
                                     viewMode = headerViewMode,
-                                    showNames = coverConfig?.showNames,
+                                    nameMode = coverConfig?.nameMode,
                                     onToggleGridView = onToggleChapterGridView,
                                 )
                             }
@@ -914,7 +914,7 @@ private fun rememberChapterCoverGridConfig(gridOnly: Boolean): ChapterCoverGridC
     val spacing by CoverGridSettings.spacing.collectAsState()
     val rowHeight by CoverGridSettings.rowHeight.collectAsState()
     val savedColumns by CoverGridSettings.chapterColumns.collectAsState()
-    val showNames by CoverGridSettings.showNames.collectAsState()
+    val nameMode by CoverGridSettings.nameMode.collectAsState()
     val width = LocalConfiguration.current.screenWidthDp
     if (!gridOnly) return null
     return ChapterCoverGridConfig(
@@ -923,7 +923,7 @@ private fun rememberChapterCoverGridConfig(gridOnly: Boolean): ChapterCoverGridC
         spacing = spacing.dp,
         rowHeight = rowHeight.dp,
         contentWidth = width.dp,
-        showNames = showNames,
+        nameMode = nameMode,
     )
 }
 
@@ -947,7 +947,7 @@ data class ChapterCoverGridConfig(
     val spacing: Dp,
     val rowHeight: Dp,
     val contentWidth: Dp,
-    val showNames: Boolean,
+    val nameMode: Int,
 )
 
 private fun LazyListScope.sharedChapterGridItems(
@@ -973,7 +973,7 @@ private fun LazyListScope.sharedChapterGridItems(
             onChapterSelected = onChapterSelected,
             boxAspect = boxAspect,
             crop = crop,
-            showTitle = coverConfig?.showNames ?: true,
+            showTitle = coverConfig?.nameMode != CoverGridSettings.NAME_HIDE,
             modifier = modifier,
         )
     }

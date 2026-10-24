@@ -85,6 +85,7 @@ import mihon.domain.manga.model.toDomainManga
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
 import mihon.icons.materialsymbols.rounded.Book
+import mihon.icons.materialsymbols.rounded.Code
 import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.Settings
 import mihon.feature.grid.CoverGridOptionsDialog
@@ -93,6 +94,7 @@ import mihon.feature.grid.coverGridItems
 import mihon.feature.grid.pinchSteps
 import mihon.icons.materialsymbols.roundedfilled.Folder
 import mihon.icons.materialsymbols.roundedfilled.Visibility
+import mihon.icons.materialsymbols.roundedfilled.ViewModule
 import mihon.icons.materialsymbols.roundedfilled.VisibilityOff
 import tachiyomi.core.common.util.system.logcat
 import tachiyomi.domain.chapter.interactor.GetChaptersByMangaId
@@ -126,12 +128,15 @@ class NasBrowserScreen : Screen() {
 
         BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
 
-        val showNames by CoverGridSettings.showNames.collectAsState()
+        val nameMode by CoverGridSettings.nameMode.collectAsState()
+        var gridOptions by remember { mutableStateOf(false) }
+        if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
         NasBrowserContent(
             state = state,
             thumbVersion = thumbVersion,
-            showNames = showNames,
-            onToggleNames = { CoverGridSettings.setShowNames(!showNames) },
+            nameMode = nameMode,
+            onCycleNames = { CoverGridSettings.cycleNameMode() },
+            onGridOptions = { gridOptions = true },
             onBack = { if (state.stack.size > 1) viewModel.goUp() else navigator.pop() },
             onRefresh = viewModel::reload,
             onOpenSettings = { viewModel.showSettings(true) },
@@ -144,9 +149,10 @@ class NasBrowserScreen : Screen() {
                 settings = NasRuntime.settings,
                 busy = state.busy,
                 onDismiss = { viewModel.showSettings(false) },
-                onSaved = {
+                onSaved = { connectionChanged ->
                     viewModel.showSettings(false)
-                    viewModel.resetToRoot()
+                    // Only go back to the start folder when the server or start folder changed
+                    if (connectionChanged || state.currentPath == null) viewModel.resetToRoot() else viewModel.reload()
                 },
                 onBackup = viewModel::backup,
                 onRestore = viewModel::restore,
@@ -367,8 +373,9 @@ class NasBrowserViewModel(
 private fun NasBrowserContent(
     state: NasState,
     thumbVersion: Long,
-    showNames: Boolean,
-    onToggleNames: () -> Unit,
+    nameMode: Int,
+    onCycleNames: () -> Unit,
+    onGridOptions: () -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -391,9 +398,16 @@ private fun NasBrowserContent(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onToggleNames) {
+                    IconButton(onClick = onGridOptions) {
+                        Icon(MaterialSymbols.RoundedFilled.ViewModule, contentDescription = null)
+                    }
+                    IconButton(onClick = onCycleNames) {
                         Icon(
-                            if (showNames) MaterialSymbols.RoundedFilled.Visibility else MaterialSymbols.RoundedFilled.VisibilityOff,
+                            when (nameMode) {
+                                CoverGridSettings.NAME_SHOW -> MaterialSymbols.RoundedFilled.Visibility
+                                CoverGridSettings.NAME_HIDE -> MaterialSymbols.RoundedFilled.VisibilityOff
+                                else -> MaterialSymbols.Rounded.Code
+                            },
                             contentDescription = null,
                         )
                     }
@@ -433,11 +447,15 @@ private fun NasBrowserContent(
                     val rowHeight by CoverGridSettings.rowHeight.collectAsState()
                     val savedColumns by CoverGridSettings.nasColumns.collectAsState()
                     val columns = CoverGridSettings.columnsOrDefault(savedColumns, maxWidth.value)
+                    val anyThumb = remember(state.entries, thumbVersion) {
+                        state.entries.any { NasRuntime.thumbs.has(it.path, folder = it.isDirectory) }
+                    }
+                    val layoutMode = if (anyThumb) mode else CoverGridSettings.MODE_SQUARE
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
-                            .pinchSteps(columns to mode) { bigger ->
-                                if (mode == CoverGridSettings.MODE_JUSTIFIED) {
+                            .pinchSteps(columns to layoutMode) { bigger ->
+                                if (layoutMode == CoverGridSettings.MODE_JUSTIFIED) {
                                     CoverGridSettings.setRowHeight(
                                         CoverGridSettings.stepRowHeight(CoverGridSettings.rowHeight.value, bigger),
                                     )
@@ -451,7 +469,7 @@ private fun NasBrowserContent(
                             items = state.entries,
                             key = { it.path },
                             aspectOf = { nasThumbAspect(it) },
-                            mode = mode,
+                            mode = layoutMode,
                             columns = columns,
                             spacing = spacing.dp,
                             rowHeight = rowHeight.dp,
@@ -461,7 +479,7 @@ private fun NasBrowserContent(
                             NasTile(
                                 entry = entry,
                                 thumbVersion = thumbVersion,
-                                showName = showNames,
+                                nameMode = nameMode,
                                 boxAspect = boxAspect,
                                 crop = crop,
                                 onClick = { onOpen(entry) },
@@ -481,7 +499,7 @@ private fun NasBrowserContent(
 private fun NasTile(
     entry: NasEntry,
     thumbVersion: Long,
-    showName: Boolean,
+    nameMode: Int,
     boxAspect: Float,
     crop: Boolean,
     onClick: () -> Unit,
@@ -538,14 +556,24 @@ private fun NasTile(
                 )
             }
         }
-        if (showName) Text(
-            text = if (entry.isDirectory) entry.name else entry.name.substringBeforeLast('.'),
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 2,
-            minLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        // Name rules only apply to tiles with a thumbnail; icon tiles always show the full name.
+        // "No brackets" applies to folders only (files keep tags like "[단]").
+        val baseName = if (entry.isDirectory) entry.name else entry.name.substringBeforeLast('.')
+        val shownName = when {
+            thumb == null -> baseName
+            nameMode == CoverGridSettings.NAME_HIDE -> null
+            nameMode == CoverGridSettings.NAME_NO_BRACKETS && entry.isDirectory -> CoverGridSettings.stripBrackets(baseName)
+            else -> baseName
+        }
+        if (shownName != null) {
+            Text(
+                text = shownName,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 2.dp),
+            )
+        }
     }
 }
 
@@ -554,7 +582,7 @@ private fun NasSettingsDialog(
     settings: NasSettings,
     busy: Boolean,
     onDismiss: () -> Unit,
-    onSaved: () -> Unit,
+    onSaved: (connectionChanged: Boolean) -> Unit,
     onBackup: () -> Unit,
     onRestore: () -> Unit,
 ) {
@@ -564,8 +592,15 @@ private fun NasSettingsDialog(
     var root by remember { mutableStateOf(settings.rootPath) }
     var thumbName by remember { mutableStateOf(settings.thumbName) }
     var backup by remember { mutableStateOf(settings.backupPath) }
+    var thumbSize by remember { mutableStateOf(settings.thumbSize) }
+
+    fun connectionChanged() = server.trim().trimEnd('/') != settings.serverUrl ||
+        user != settings.username ||
+        password != settings.password ||
+        NasSettings.normalizePath(root) != settings.rootPath
 
     fun save() {
+        settings.thumbSize = thumbSize
         settings.serverUrl = server
         settings.username = user
         settings.password = password
@@ -613,9 +648,20 @@ private fun NasSettingsDialog(
                     placeholder = { Text(NasSettings.DEFAULT_THUMB_NAME) },
                     singleLine = true,
                 )
-                var gridOptions by remember { mutableStateOf(false) }
-                OutlinedButton(onClick = { gridOptions = true }) { Text("그리드 보기 설정") }
-                if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
+                Text("썸네일 해상도 (새로 만드는 썸네일부터 적용)", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(480, 700, 1000).forEach { size ->
+                        val selected = thumbSize == size
+                        OutlinedButton(
+                            onClick = { thumbSize = size },
+                            border = if (selected) {
+                                androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                            } else {
+                                null
+                            },
+                        ) { Text("${size}px") }
+                    }
+                }
                 HorizontalDivider()
                 OutlinedTextField(
                     value = backup,
@@ -645,8 +691,9 @@ private fun NasSettingsDialog(
         },
         confirmButton = {
             TextButton(onClick = {
+                val changed = connectionChanged()
                 save()
-                onSaved()
+                onSaved(changed)
             }) { Text("저장") }
         },
         dismissButton = {

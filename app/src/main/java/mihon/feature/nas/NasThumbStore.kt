@@ -69,14 +69,13 @@ class NasThumbStore(context: Context) {
     }
 
     companion object {
-        private const val MAX_SIDE = 480
-
         fun downscale(bytes: ByteArray): ByteArray? {
+            val maxSide = NasRuntime.settings.thumbSize.coerceIn(200, 2000)
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
             var sample = 1
-            while (bounds.outWidth / (sample * 2) >= MAX_SIDE && bounds.outHeight / (sample * 2) >= MAX_SIDE) {
+            while (bounds.outWidth / (sample * 2) >= maxSide && bounds.outHeight / (sample * 2) >= maxSide) {
                 sample *= 2
             }
             val bitmap = BitmapFactory.decodeByteArray(
@@ -85,7 +84,7 @@ class NasThumbStore(context: Context) {
                 bytes.size,
                 BitmapFactory.Options().apply { inSampleSize = sample },
             ) ?: return null
-            val scale = MAX_SIDE.toFloat() / maxOf(bitmap.width, bitmap.height)
+            val scale = maxSide.toFloat() / maxOf(bitmap.width, bitmap.height)
             val scaled = if (scale < 1f) {
                 Bitmap.createScaledBitmap(
                     bitmap,
