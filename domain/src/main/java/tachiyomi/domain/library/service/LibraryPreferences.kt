@@ -213,6 +213,9 @@ class LibraryPreferences(
         ChapterSwipeAction.ToggleRead,
     )
 
+    // Custom: show chapters (volumes) as a cover grid when the source provides per-chapter thumbnails (Komga)
+    val chapterGridView: Preference<Boolean> = preferenceStore.getBoolean("pref_chapter_grid_view", true)
+
     val updateMangaTitles: Preference<Boolean> = preferenceStore.getBoolean("pref_update_library_manga_titles", false)
 
     val disallowNonAsciiFilenames: Preference<Boolean> = preferenceStore.getBoolean(

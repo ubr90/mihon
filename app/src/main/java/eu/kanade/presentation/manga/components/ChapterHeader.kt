@@ -3,14 +3,21 @@ package eu.kanade.presentation.manga.components
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import mihon.icons.materialsymbols.MaterialSymbols
+import mihon.icons.materialsymbols.automirroredroundedfilled.ViewList
+import mihon.icons.materialsymbols.roundedfilled.ViewModule
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.components.material.SECONDARY_ALPHA
 import tachiyomi.presentation.core.components.material.padding
@@ -24,29 +31,53 @@ fun ChapterHeader(
     missingChapterCount: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    gridView: Boolean? = null,
+    onToggleGridView: (() -> Unit)? = null,
 ) {
-    Column(
+    Row(
         modifier = modifier
             .fillMaxWidth()
             .clickable(
                 enabled = enabled,
                 onClick = onClick,
             )
-            .padding(horizontal = 16.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(MaterialTheme.padding.extraSmall),
+            .padding(start = 16.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = if (chapterCount == null) {
-                stringResource(MR.strings.chapters)
-            } else {
-                pluralStringResource(MR.plurals.manga_num_chapters, count = chapterCount, chapterCount)
-            },
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-        )
-
-        MissingChaptersWarning(missingChapterCount)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(MaterialTheme.padding.extraSmall),
+        ) {
+            ChapterHeaderText(chapterCount, missingChapterCount)
+        }
+        if (gridView != null && onToggleGridView != null) {
+            IconButton(onClick = onToggleGridView, enabled = enabled) {
+                Icon(
+                    imageVector = if (gridView) {
+                        MaterialSymbols.AutoMirroredRoundedFilled.ViewList
+                    } else {
+                        MaterialSymbols.RoundedFilled.ViewModule
+                    },
+                    contentDescription = null,
+                )
+            }
+        }
     }
+}
+
+@Composable
+private fun ChapterHeaderText(chapterCount: Int?, missingChapterCount: Int) {
+    Text(
+        text = if (chapterCount == null) {
+            stringResource(MR.strings.chapters)
+        } else {
+            pluralStringResource(MR.plurals.manga_num_chapters, count = chapterCount, chapterCount)
+        },
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.onBackground,
+    )
+
+    MissingChaptersWarning(missingChapterCount)
 }
 
 @Composable

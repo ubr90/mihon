@@ -62,6 +62,7 @@ import tachiyomi.core.common.util.system.logcat
 import tachiyomi.domain.chapter.model.Chapter
 import tachiyomi.domain.manga.model.Manga
 import tachiyomi.presentation.core.screens.LoadingScreen
+import tachiyomi.presentation.core.util.collectAsState
 
 class MangaScreen(
     private val mangaId: Long,
@@ -105,8 +106,12 @@ class MangaScreen(
             }
         }
 
+        val chapterGridView by viewModel.chapterGridViewPref.collectAsState()
+
         MangaScreen(
             state = successState,
+            chapterGridView = chapterGridView,
+            onToggleChapterGridView = { viewModel.chapterGridViewPref.set(!chapterGridView) },
             snackbarHostState = viewModel.snackbarHostState,
             nextUpdate = successState.manga.expectedNextUpdate,
             isTabletUi = isTabletUi(),

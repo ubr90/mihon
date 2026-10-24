@@ -74,6 +74,9 @@ android {
             isPseudoLocalesEnabled = true
         }
         val release = getByName("release") {
+            // Custom build: installs alongside the official Mihon app
+            applicationIdSuffix = ".custom"
+            versionNameSuffix = "-custom"
             isMinifyEnabled = true
             isShrinkResources = true
 

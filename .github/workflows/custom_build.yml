@@ -1,0 +1,47 @@
+name: Custom APK
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: custom-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Signing config
+        run: |
+          cat > keystore.properties <<PROPS
+          storeFile=../.github/custom.keystore
+          storePassword=mihoncustom
+          keyAlias=custom
+          keyPassword=mihoncustom
+          PROPS
+
+      - name: Build APK
+        run: ./gradlew assembleRelease -Pdist=ci
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mihon-custom-apk
+          path: app/build/outputs/apk/release/app-arm64-v8a-release.apk
