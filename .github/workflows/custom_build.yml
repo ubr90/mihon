@@ -38,7 +38,16 @@ jobs:
           PROPS
 
       - name: Build APK
-        run: ./gradlew assembleRelease -Pdist=ci
+        run: |
+          set -o pipefail
+          ./gradlew assembleRelease -Pdist=ci 2>&1 | tee build.log
+
+      - name: Report errors
+        if: failure()
+        run: |
+          grep -E "^e: |What went wrong|^> |error:" build.log | head -40 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
