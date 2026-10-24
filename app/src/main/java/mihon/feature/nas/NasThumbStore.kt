@@ -49,7 +49,7 @@ class NasThumbStore(context: Context) {
 
     @Synchronized
     fun put(path: String, folder: Boolean, imageBytes: ByteArray, alreadyThumbnail: Boolean = false) {
-        val data = if (alreadyThumbnail) imageBytes else downscale(imageBytes) ?: return
+        val data = if (alreadyThumbnail) imageBytes else downscale(imageBytes) ?: error("이미지를 읽을 수 없음")
         val k = key(path, folder)
         File(dir, "$k.jpg").writeBytes(data)
         index[k] = Item(path, folder)

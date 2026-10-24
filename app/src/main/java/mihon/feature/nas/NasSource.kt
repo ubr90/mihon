@@ -11,6 +11,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import logcat.LogPriority
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
@@ -133,6 +134,17 @@ object NasSource : HttpSource() {
                 .build()
             Page(i, imageUrl = url.toString())
         }
+    }
+
+    /** Reads a reader page's image straight from the archive on the NAS. */
+    fun pageBytes(page: Page): ByteArray {
+        val url = page.imageUrl?.toHttpUrlOrNull()
+            ?: error("페이지 주소 없음")
+        val zipPath = url.queryParameter("z") ?: error("zip 경로 없음")
+        val entryName = url.queryParameter("e") ?: error("이미지 이름 없음")
+        val zip = RemoteZip.open(NasRuntime.dav, zipPath)
+        val entry = zip.entries.firstOrNull { it.name == entryName } ?: error("이미지를 찾을 수 없음")
+        return zip.read(entry)
     }
 
     private fun serveEntry(request: okhttp3.Request, url: HttpUrl): Response {

@@ -674,15 +674,15 @@ class ReaderActivity : BaseActivity() {
         lifecycleScope.launch {
             val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
-                    val bytes = page.stream?.invoke()?.use { it.readBytes() } ?: error("no image")
+                    val bytes = mihon.feature.nas.NasSource.pageBytes(page)
                     mihon.feature.nas.NasRuntime.thumbs.put(
                         mihon.feature.nas.parentPath(chapter.chapter.url),
                         folder = true,
                         imageBytes = bytes,
                     )
-                }.isSuccess
+                }
             }
-            toast(if (ok) "폴더 썸네일로 지정했어요" else "지정하지 못했어요")
+            toast(ok.fold({ "폴더 썸네일로 지정했어요" }, { "지정하지 못했어요: ${it.message}" }))
         }
     }
 
@@ -698,10 +698,10 @@ class ReaderActivity : BaseActivity() {
                     val zip = mihon.feature.nas.RemoteZip.open(runtime.dav, zipPath)
                     val toc = mihon.feature.nas.buildToc(zip.pages(runtime.settings.thumbName).map { it.name })
                     val entry = toc.lastOrNull { it.pageIndex <= page.index } ?: return@runCatching "목차가 없어요"
-                    val bytes = page.stream?.invoke()?.use { it.readBytes() } ?: error("no image")
+                    val bytes = mihon.feature.nas.NasSource.pageBytes(page)
                     runtime.thumbs.put(mihon.feature.nas.tocThumbPath(zipPath, entry), folder = false, imageBytes = bytes)
                     "'${entry.name}' 목차 표지로 지정했어요"
-                }.getOrElse { "지정하지 못했어요" }
+                }.getOrElse { "지정하지 못했어요: ${it.message}" }
             }
             toast(message)
         }
