@@ -322,6 +322,12 @@ class NasBrowserViewModel(
 
     private fun backupFile(item: NasThumbStore.Item): String {
         val base = settings.backupPath
+        // Table-of-contents thumbnails use "<zip>#<folder in zip>" as path
+        if ('#' in item.path) {
+            val zip = item.path.substringBefore('#')
+            val dir = item.path.substringAfter('#')
+            return base + zip + ".toc/" + dir + ".jpg"
+        }
         return if (item.folder) childPath(base + item.path, settings.thumbName) else base + item.path + ".jpg"
     }
 

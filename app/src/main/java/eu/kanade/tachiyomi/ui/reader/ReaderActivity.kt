@@ -324,7 +324,7 @@ class ReaderActivity : BaseActivity() {
                 if (viewModel.manga?.source == mihon.feature.nas.NasSource.SOURCE_ID) {
                     // Custom: NAS archives get their own menu (folder thumbnail, table of contents)
                     val actionPage = (state.dialog as ReaderViewModel.Dialog.PageActions).page
-                    mihon.feature.nas.NasPageActionsDialog(
+                    mihon.feature.nas.NasTocHost(
                         page = actionPage,
                         zipPath = actionPage.chapter.chapter.url,
                         onDismissRequest = onDismissRequest,
@@ -457,6 +457,7 @@ class ReaderActivity : BaseActivity() {
     @Composable
     fun AppBars(state: ReaderViewModel.State) {
         val isHttpSource = state.source is HttpSource
+        val isNas = state.manga?.source == mihon.feature.nas.NasSource.SOURCE_ID
 
         val cropBorderPaged by readerPreferences.cropBorders.collectAsState()
         val cropBorderWebtoon by readerPreferences.cropBordersWebtoon.collectAsState()
@@ -479,9 +480,10 @@ class ReaderActivity : BaseActivity() {
             onClickTopAppBar = ::openMangaScreen,
             bookmarked = state.bookmarked,
             onToggleBookmarked = viewModel::toggleChapterBookmark,
-            onOpenInWebView = ::openChapterInWebView.takeIf { isHttpSource },
-            onOpenInBrowser = ::openChapterInBrowser.takeIf { isHttpSource },
-            onShare = ::shareChapter.takeIf { isHttpSource },
+            onOpenInWebView = ::openChapterInWebView.takeIf { isHttpSource && !isNas },
+            onOpenInBrowser = ::openChapterInBrowser.takeIf { isHttpSource && !isNas },
+            onShare = ::shareChapter.takeIf { isHttpSource && !isNas },
+            onSetAsCover = { setNasFolderCover(state) }.takeIf { isNas },
 
             chapterNavigatorType = if (!verticalNavigator) {
                 if (state.viewer is R2LPagerViewer || (state.viewer as? WebGpuViewer)?.isReversed ?: false) {
@@ -664,6 +666,25 @@ class ReaderActivity : BaseActivity() {
      * Moves the viewer to the given page [index]. It does nothing if the viewer is null or the
      * page is not found.
      */
+    // Custom: NAS — current page becomes the thumbnail of the folder holding this archive
+    private fun setNasFolderCover(state: ReaderViewModel.State) {
+        val chapter = state.currentChapter ?: return
+        val page = chapter.pages?.getOrNull(state.currentPage - 1) ?: return
+        lifecycleScope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val bytes = page.stream?.invoke()?.use { it.readBytes() } ?: error("no image")
+                    mihon.feature.nas.NasRuntime.thumbs.put(
+                        mihon.feature.nas.parentPath(chapter.chapter.url),
+                        folder = true,
+                        imageBytes = bytes,
+                    )
+                }.isSuccess
+            }
+            toast(if (ok) "폴더 썸네일로 지정했어요" else "지정하지 못했어요")
+        }
+    }
+
     private fun moveToPageIndex(index: Int) {
         val viewer = viewModel.state.value.viewer ?: return
         val currentChapter = viewModel.state.value.currentChapter ?: return

@@ -68,6 +68,10 @@ object CoverGridSettings {
     val rowHeight by lazy { MutableStateFlow(prefs.getInt("row_height", 200)) }
     val nasColumns by lazy { MutableStateFlow(prefs.getInt("nas_columns", 0)) }
     val chapterColumns by lazy { MutableStateFlow(prefs.getInt("chapter_columns", 0)) }
+    val tocGrid by lazy { MutableStateFlow(prefs.getBoolean("toc_grid", true)) }
+    val tocColumns by lazy { MutableStateFlow(prefs.getInt("toc_columns", 0)) }
+    fun setTocGrid(v: Boolean) { tocGrid.value = v; prefs.edit { putBoolean("toc_grid", v) } }
+    fun setTocColumns(v: Int) { tocColumns.value = v; prefs.edit { putInt("toc_columns", v) } }
 
     fun setAspectMode(v: Int) { aspectMode.value = v; prefs.edit { putInt("aspect", v) } }
     fun setSpacing(v: Int) { spacing.value = v; prefs.edit { putInt("spacing", v) } }
