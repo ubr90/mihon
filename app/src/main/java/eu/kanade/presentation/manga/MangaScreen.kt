@@ -34,6 +34,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.animateFloatingActionButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -43,10 +44,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.util.fastAll
 import androidx.compose.ui.util.fastAny
@@ -70,6 +73,11 @@ import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.ui.manga.ChapterList
 import eu.kanade.tachiyomi.ui.manga.MangaViewModel
 import eu.kanade.tachiyomi.util.system.copyToClipboard
+import mihon.feature.grid.CoverAspectCache
+import mihon.feature.grid.CoverGridSettings
+import mihon.feature.grid.CoverTile
+import mihon.feature.grid.coverGridItems
+import mihon.feature.grid.pinchSteps
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.roundedfilled.PlayArrow
 import tachiyomi.domain.chapter.model.Chapter
@@ -308,6 +316,7 @@ private fun MangaScreenSmallImpl(
         showGrid -> CHAPTER_VIEW_GRID
         else -> CHAPTER_VIEW_LIST
     }
+    val coverConfig = rememberChapterCoverGridConfig(gridOnly)
 
     BackHandler(enabled = isAnySelected) {
         onAllChapterSelected(false)
@@ -395,7 +404,7 @@ private fun MangaScreenSmallImpl(
                 endContentPadding = contentPadding.calculateEndPadding(layoutDirection),
             ) {
                 LazyColumn(
-                    modifier = Modifier.fillMaxHeight(),
+                    modifier = Modifier.fillMaxHeight().chapterGridPinch(coverConfig),
                     state = chapterListState,
                     contentPadding = PaddingValues(
                         start = contentPadding.calculateStartPadding(layoutDirection),
@@ -462,6 +471,7 @@ private fun MangaScreenSmallImpl(
                             missingChapterCount = state.missingChapterCount,
                             onClick = onFilterClicked,
                             viewMode = headerViewMode,
+                            showNames = coverConfig?.showNames,
                             onToggleGridView = onToggleChapterGridView,
                         )
                     }
@@ -471,6 +481,7 @@ private fun MangaScreenSmallImpl(
                         chapters = listItem,
                         thumbnailBaseUrl = thumbnailBaseUrl,
                         showAsGrid = showGrid,
+                        coverConfig = coverConfig,
                         thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                         isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                         chapterSwipeStartAction = chapterSwipeStartAction,
@@ -563,6 +574,7 @@ fun MangaScreenLargeImpl(
         showGrid -> CHAPTER_VIEW_GRID
         else -> CHAPTER_VIEW_LIST
     }
+    val coverConfig = rememberChapterCoverGridConfig(gridOnly)
 
     val insetPadding = WindowInsets.systemBars.only(WindowInsetsSides.Horizontal).asPaddingValues()
     var topBarHeight by remember { mutableIntStateOf(0) }
@@ -692,7 +704,7 @@ fun MangaScreenLargeImpl(
                         topContentPadding = contentPadding.calculateTopPadding(),
                     ) {
                         LazyColumn(
-                            modifier = Modifier.fillMaxHeight(),
+                            modifier = Modifier.fillMaxHeight().chapterGridPinch(coverConfig),
                             state = chapterListState,
                             contentPadding = PaddingValues(
                                 top = contentPadding.calculateTopPadding(),
@@ -709,6 +721,7 @@ fun MangaScreenLargeImpl(
                                     missingChapterCount = state.missingChapterCount,
                                     onClick = onFilterButtonClicked,
                                     viewMode = headerViewMode,
+                                    showNames = coverConfig?.showNames,
                                     onToggleGridView = onToggleChapterGridView,
                                 )
                             }
@@ -718,7 +731,7 @@ fun MangaScreenLargeImpl(
                                 chapters = listItem,
                                 thumbnailBaseUrl = thumbnailBaseUrl,
                                 showAsGrid = showGrid,
-                                gridColumns = if (gridOnly) 6 else CHAPTER_GRID_COLUMNS,
+                                coverConfig = coverConfig,
                                 thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                                 isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                                 chapterSwipeStartAction = chapterSwipeStartAction,
@@ -786,7 +799,7 @@ private fun LazyListScope.sharedChapterItems(
     showAsGrid: Boolean,
     thumbnailRefreshedAt: Long,
     isAnyChapterSelected: Boolean,
-    gridColumns: Int = CHAPTER_GRID_COLUMNS,
+    coverConfig: ChapterCoverGridConfig? = null,
     chapterSwipeStartAction: LibraryPreferences.ChapterSwipeAction,
     chapterSwipeEndAction: LibraryPreferences.ChapterSwipeAction,
     onChapterClicked: (Chapter) -> Unit,
@@ -797,7 +810,8 @@ private fun LazyListScope.sharedChapterItems(
 ) {
     if (showAsGrid) {
         sharedChapterGridItems(
-            columns = gridColumns,
+            columns = CHAPTER_GRID_COLUMNS,
+            coverConfig = coverConfig,
             manga = manga,
             chapters = chapters,
             thumbnailBaseUrl = thumbnailBaseUrl,
@@ -894,11 +908,51 @@ private fun MangaTwoPanelBox(
     }
 }
 
+@Composable
+private fun rememberChapterCoverGridConfig(gridOnly: Boolean): ChapterCoverGridConfig? {
+    val mode by CoverGridSettings.aspectMode.collectAsState()
+    val spacing by CoverGridSettings.spacing.collectAsState()
+    val rowHeight by CoverGridSettings.rowHeight.collectAsState()
+    val savedColumns by CoverGridSettings.chapterColumns.collectAsState()
+    val showNames by CoverGridSettings.showNames.collectAsState()
+    val width = LocalConfiguration.current.screenWidthDp
+    if (!gridOnly) return null
+    return ChapterCoverGridConfig(
+        mode = mode,
+        columns = CoverGridSettings.columnsOrDefault(savedColumns, width.toFloat()),
+        spacing = spacing.dp,
+        rowHeight = rowHeight.dp,
+        contentWidth = width.dp,
+        showNames = showNames,
+    )
+}
+
+private fun Modifier.chapterGridPinch(config: ChapterCoverGridConfig?): Modifier {
+    if (config == null) return this
+    return pinchSteps(config) { bigger ->
+        if (config.mode == CoverGridSettings.MODE_JUSTIFIED) {
+            CoverGridSettings.setRowHeight(CoverGridSettings.stepRowHeight(CoverGridSettings.rowHeight.value, bigger))
+        } else {
+            CoverGridSettings.setChapterColumns(CoverGridSettings.stepColumns(config.columns, bigger))
+        }
+    }
+}
+
 private const val CHAPTER_GRID_COLUMNS = 3
 
 // Custom: chapters (volumes) as rows of cover tiles inside the existing LazyColumn
+data class ChapterCoverGridConfig(
+    val mode: Int,
+    val columns: Int,
+    val spacing: Dp,
+    val rowHeight: Dp,
+    val contentWidth: Dp,
+    val showNames: Boolean,
+)
+
 private fun LazyListScope.sharedChapterGridItems(
     columns: Int,
+    coverConfig: ChapterCoverGridConfig?,
     manga: Manga,
     chapters: List<ChapterList>,
     thumbnailBaseUrl: String?,
@@ -907,62 +961,115 @@ private fun LazyListScope.sharedChapterGridItems(
     onChapterClicked: (Chapter) -> Unit,
     onChapterSelected: (ChapterList.Item, Boolean, Boolean) -> Unit,
 ) {
-    val rows = chapters.filterIsInstance<ChapterList.Item>().chunked(columns)
+    val chapterItems = chapters.filterIsInstance<ChapterList.Item>()
+    val tile: CoverTile<ChapterList.Item> = { item, modifier, boxAspect, crop ->
+        ChapterCoverTile(
+            item = item,
+            manga = manga,
+            thumbnailBaseUrl = thumbnailBaseUrl,
+            thumbnailRefreshedAt = thumbnailRefreshedAt,
+            isAnyChapterSelected = isAnyChapterSelected,
+            onChapterClicked = onChapterClicked,
+            onChapterSelected = onChapterSelected,
+            boxAspect = boxAspect,
+            crop = crop,
+            showTitle = coverConfig?.showNames ?: true,
+            modifier = modifier,
+        )
+    }
+    if (coverConfig != null) {
+        coverGridItems(
+            items = chapterItems,
+            key = { it.id },
+            aspectOf = { item ->
+                chapterThumbnailUrl(item.chapter.url, thumbnailBaseUrl)?.let { CoverAspectCache.ratios[it] }
+            },
+            mode = coverConfig.mode,
+            columns = coverConfig.columns,
+            spacing = coverConfig.spacing,
+            rowHeight = coverConfig.rowHeight,
+            contentWidth = coverConfig.contentWidth,
+            horizontalPadding = 12.dp,
+            tile = tile,
+        )
+        return
+    }
+    val rows = chapterItems.chunked(columns)
     items(
         items = rows,
         key = { row -> "chapter-grid-${row.first().id}" },
         contentType = { "chapter_grid_row" },
     ) { row ->
-        val haptic = LocalHapticFeedback.current
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            row.forEach { item ->
-                val chapter = item.chapter
-                MangaChapterGridItem(
-                    title = chapterDisplayTitle(manga, chapter),
-                    coverData = chapterThumbnailUrl(chapter.url, thumbnailBaseUrl)?.let { url ->
-                        MangaCover(
-                            mangaId = manga.id,
-                            sourceId = manga.source,
-                            isMangaFavorite = false,
-                            url = url,
-                            lastModified = thumbnailRefreshedAt
-                                .takeIf { it > 0L }
-                                ?.let { Instant.fromEpochMilliseconds(it) },
-                        )
-                    } ?: manga,
-                    readProgress = chapter.lastPageRead
-                        .takeIf { !chapter.read && it > 0L }
-                        ?.let { stringResource(MR.strings.chapter_progress, it + 1) },
-                    read = chapter.read,
-                    inProgress = !chapter.read && chapter.lastPageRead > 0L,
-                    bookmark = chapter.bookmark,
-                    downloaded = item.downloadState == Download.State.DOWNLOADED,
-                    selected = item.selected,
-                    onClick = {
-                        onChapterItemClick(
-                            chapterItem = item,
-                            isAnyChapterSelected = isAnyChapterSelected,
-                            onToggleSelection = { onChapterSelected(item, !item.selected, false) },
-                            onChapterClicked = onChapterClicked,
-                        )
-                    },
-                    onLongClick = {
-                        onChapterSelected(item, !item.selected, true)
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            row.forEach { item -> tile(item, Modifier.weight(1f), CoverGridSettings.RATIO_2_3, true) }
             repeat(columns - row.size) {
                 Spacer(modifier = Modifier.weight(1f))
             }
         }
     }
+}
+
+@Composable
+private fun ChapterCoverTile(
+    item: ChapterList.Item,
+    manga: Manga,
+    thumbnailBaseUrl: String?,
+    thumbnailRefreshedAt: Long,
+    isAnyChapterSelected: Boolean,
+    onChapterClicked: (Chapter) -> Unit,
+    onChapterSelected: (ChapterList.Item, Boolean, Boolean) -> Unit,
+    boxAspect: Float,
+    crop: Boolean,
+    showTitle: Boolean,
+    modifier: Modifier,
+) {
+    val haptic = LocalHapticFeedback.current
+    val chapter = item.chapter
+    val thumbUrl = chapterThumbnailUrl(chapter.url, thumbnailBaseUrl)
+    MangaChapterGridItem(
+        title = chapterDisplayTitle(manga, chapter),
+        coverData = thumbUrl?.let { url ->
+            MangaCover(
+                mangaId = manga.id,
+                sourceId = manga.source,
+                isMangaFavorite = false,
+                url = url,
+                lastModified = thumbnailRefreshedAt
+                    .takeIf { it > 0L }
+                    ?.let { Instant.fromEpochMilliseconds(it) },
+            )
+        } ?: manga,
+        readProgress = chapter.lastPageRead
+            .takeIf { !chapter.read && it > 0L }
+            ?.let { stringResource(MR.strings.chapter_progress, it + 1) },
+        read = chapter.read,
+        inProgress = !chapter.read && chapter.lastPageRead > 0L,
+        bookmark = chapter.bookmark,
+        downloaded = item.downloadState == Download.State.DOWNLOADED,
+        selected = item.selected,
+        onClick = {
+            onChapterItemClick(
+                chapterItem = item,
+                isAnyChapterSelected = isAnyChapterSelected,
+                onToggleSelection = { onChapterSelected(item, !item.selected, false) },
+                onChapterClicked = onChapterClicked,
+            )
+        },
+        onLongClick = {
+            onChapterSelected(item, !item.selected, true)
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        },
+        boxAspect = boxAspect,
+        crop = crop,
+        showTitle = showTitle,
+        onImageRatio = { ratio -> if (thumbUrl != null) CoverAspectCache.ratios[thumbUrl] = ratio },
+        modifier = modifier,
+    )
 }
 
 private val ChapterNumberPrefixRegex = Regex("""^\s*[\d.]+\s+-\s+""")

@@ -11,14 +11,23 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import mihon.feature.grid.CoverGridOptionsDialog
+import mihon.feature.grid.CoverGridSettings
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredroundedfilled.ViewList
+import mihon.icons.materialsymbols.rounded.Settings
 import mihon.icons.materialsymbols.roundedfilled.ViewCompact
 import mihon.icons.materialsymbols.roundedfilled.ViewModule
+import mihon.icons.materialsymbols.roundedfilled.Visibility
+import mihon.icons.materialsymbols.roundedfilled.VisibilityOff
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.components.material.SECONDARY_ALPHA
 import tachiyomi.presentation.core.components.material.padding
@@ -34,7 +43,10 @@ fun ChapterHeader(
     modifier: Modifier = Modifier,
     viewMode: Int? = null,
     onToggleGridView: (() -> Unit)? = null,
+    showNames: Boolean? = null,
 ) {
+    var gridOptions by remember { mutableStateOf(false) }
+    if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -50,6 +62,22 @@ fun ChapterHeader(
             verticalArrangement = Arrangement.spacedBy(MaterialTheme.padding.extraSmall),
         ) {
             ChapterHeaderText(chapterCount, missingChapterCount)
+        }
+        if (showNames != null) {
+            // Custom: grid-only mode controls (shared with the NAS browser)
+            IconButton(onClick = { CoverGridSettings.setShowNames(!showNames) }, enabled = enabled) {
+                Icon(
+                    imageVector = if (showNames) {
+                        MaterialSymbols.RoundedFilled.Visibility
+                    } else {
+                        MaterialSymbols.RoundedFilled.VisibilityOff
+                    },
+                    contentDescription = null,
+                )
+            }
+            IconButton(onClick = { gridOptions = true }, enabled = enabled) {
+                Icon(imageVector = MaterialSymbols.Rounded.Settings, contentDescription = null)
+            }
         }
         if (viewMode != null && onToggleGridView != null) {
             // Icon shows the mode the button switches to: list -> grid -> grid only -> list

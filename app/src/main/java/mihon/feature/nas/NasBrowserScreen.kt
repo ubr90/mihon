@@ -7,6 +7,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,9 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -88,7 +87,13 @@ import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
 import mihon.icons.materialsymbols.rounded.Book
 import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.Settings
+import mihon.feature.grid.CoverGridOptionsDialog
+import mihon.feature.grid.CoverGridSettings
+import mihon.feature.grid.coverGridItems
+import mihon.feature.grid.pinchSteps
 import mihon.icons.materialsymbols.roundedfilled.Folder
+import mihon.icons.materialsymbols.roundedfilled.Visibility
+import mihon.icons.materialsymbols.roundedfilled.VisibilityOff
 import tachiyomi.core.common.util.system.logcat
 import tachiyomi.domain.chapter.interactor.GetChaptersByMangaId
 import tachiyomi.domain.manga.interactor.NetworkToLocalManga
@@ -121,9 +126,12 @@ class NasBrowserScreen : Screen() {
 
         BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
 
+        val showNames by CoverGridSettings.showNames.collectAsState()
         NasBrowserContent(
             state = state,
             thumbVersion = thumbVersion,
+            showNames = showNames,
+            onToggleNames = { CoverGridSettings.setShowNames(!showNames) },
             onBack = { if (state.stack.size > 1) viewModel.goUp() else navigator.pop() },
             onRefresh = viewModel::reload,
             onOpenSettings = { viewModel.showSettings(true) },
@@ -359,6 +367,8 @@ class NasBrowserViewModel(
 private fun NasBrowserContent(
     state: NasState,
     thumbVersion: Long,
+    showNames: Boolean,
+    onToggleNames: () -> Unit,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -381,6 +391,12 @@ private fun NasBrowserContent(
                     }
                 },
                 actions = {
+                    IconButton(onClick = onToggleNames) {
+                        Icon(
+                            if (showNames) MaterialSymbols.RoundedFilled.Visibility else MaterialSymbols.RoundedFilled.VisibilityOff,
+                            contentDescription = null,
+                        )
+                    }
                     IconButton(onClick = onRefresh) {
                         Icon(MaterialSymbols.Rounded.Refresh, contentDescription = null)
                     }
@@ -411,19 +427,48 @@ private fun NasBrowserContent(
                     onClick = onOpenSettings,
                     modifier = Modifier.align(Alignment.Center),
                 ) { Text("NAS 설정하기") }
-                else -> LazyVerticalGrid(
-                    columns = GridCells.Adaptive(112.dp),
-                    contentPadding = PaddingValues(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(state.entries, key = { it.path }) { entry ->
-                        NasTile(
-                            entry = entry,
-                            thumbVersion = thumbVersion,
-                            onClick = { onOpen(entry) },
-                            onSetFolderThumb = { onSetFolderThumb(entry) },
-                        )
+                else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+                    val mode by CoverGridSettings.aspectMode.collectAsState()
+                    val spacing by CoverGridSettings.spacing.collectAsState()
+                    val rowHeight by CoverGridSettings.rowHeight.collectAsState()
+                    val savedColumns by CoverGridSettings.nasColumns.collectAsState()
+                    val columns = CoverGridSettings.columnsOrDefault(savedColumns, maxWidth.value)
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pinchSteps(columns to mode) { bigger ->
+                                if (mode == CoverGridSettings.MODE_JUSTIFIED) {
+                                    CoverGridSettings.setRowHeight(
+                                        CoverGridSettings.stepRowHeight(CoverGridSettings.rowHeight.value, bigger),
+                                    )
+                                } else {
+                                    CoverGridSettings.setNasColumns(CoverGridSettings.stepColumns(columns, bigger))
+                                }
+                            },
+                        contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
+                    ) {
+                        coverGridItems(
+                            items = state.entries,
+                            key = { it.path },
+                            aspectOf = { nasThumbAspect(it) },
+                            mode = mode,
+                            columns = columns,
+                            spacing = spacing.dp,
+                            rowHeight = rowHeight.dp,
+                            contentWidth = maxWidth,
+                            horizontalPadding = 8.dp,
+                        ) { entry, modifier, boxAspect, crop ->
+                            NasTile(
+                                entry = entry,
+                                thumbVersion = thumbVersion,
+                                showName = showNames,
+                                boxAspect = boxAspect,
+                                crop = crop,
+                                onClick = { onOpen(entry) },
+                                onSetFolderThumb = { onSetFolderThumb(entry) },
+                                modifier = modifier,
+                            )
+                        }
                     }
                 }
             }
@@ -436,8 +481,12 @@ private fun NasBrowserContent(
 private fun NasTile(
     entry: NasEntry,
     thumbVersion: Long,
+    showName: Boolean,
+    boxAspect: Float,
+    crop: Boolean,
     onClick: () -> Unit,
     onSetFolderThumb: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
@@ -445,18 +494,17 @@ private fun NasTile(
         NasRuntime.thumbs.get(entry.path, folder = entry.isDirectory)
     }
     Column(
-        modifier = Modifier
+        modifier = modifier
             .clip(MaterialTheme.shapes.small)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = { if (!entry.isDirectory) menu = true },
             )
-            .padding(4.dp),
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .aspectRatio(2f / 3f)
+                .aspectRatio(boxAspect)
                 .clip(MaterialTheme.shapes.extraSmall)
                 .background(MaterialTheme.colorScheme.surfaceVariant),
             contentAlignment = Alignment.Center,
@@ -469,7 +517,7 @@ private fun NasTile(
                         .diskCachePolicy(CachePolicy.DISABLED)
                         .build(),
                     contentDescription = entry.name,
-                    contentScale = ContentScale.Crop,
+                    contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
@@ -490,7 +538,7 @@ private fun NasTile(
                 )
             }
         }
-        Text(
+        if (showName) Text(
             text = if (entry.isDirectory) entry.name else entry.name.substringBeforeLast('.'),
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
@@ -565,6 +613,9 @@ private fun NasSettingsDialog(
                     placeholder = { Text(NasSettings.DEFAULT_THUMB_NAME) },
                     singleLine = true,
                 )
+                var gridOptions by remember { mutableStateOf(false) }
+                OutlinedButton(onClick = { gridOptions = true }) { Text("그리드 보기 설정") }
+                if (gridOptions) CoverGridOptionsDialog(onDismiss = { gridOptions = false })
                 HorizontalDivider()
                 OutlinedTextField(
                     value = backup,
@@ -602,4 +653,19 @@ private fun NasSettingsDialog(
             TextButton(onClick = onDismiss) { Text("닫기") }
         },
     )
+}
+
+/** Real ratio (w/h) of a local thumbnail, or null when there is none yet. */
+private val nasAspects = java.util.concurrent.ConcurrentHashMap<String, Float>()
+
+private fun nasThumbAspect(entry: NasEntry): Float? {
+    val file = NasRuntime.thumbs.get(entry.path, folder = entry.isDirectory) ?: return null
+    val key = file.path + ":" + file.lastModified()
+    nasAspects[key]?.let { return it }
+    val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    android.graphics.BitmapFactory.decodeFile(file.path, opts)
+    if (opts.outWidth <= 0 || opts.outHeight <= 0) return null
+    val ratio = opts.outWidth.toFloat() / opts.outHeight
+    nasAspects[key] = ratio
+    return ratio
 }

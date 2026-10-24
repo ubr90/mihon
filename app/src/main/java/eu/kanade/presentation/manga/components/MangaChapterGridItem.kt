@@ -50,6 +50,10 @@ fun MangaChapterGridItem(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
+    boxAspect: Float = 2f / 3f,
+    crop: Boolean = true,
+    showTitle: Boolean = true,
+    onImageRatio: ((Float) -> Unit)? = null,
 ) {
     Column(
         modifier = modifier
@@ -67,11 +71,17 @@ fun MangaChapterGridItem(
                 placeholder = ColorPainter(Color(0x1F888888)),
                 error = rememberResourceBitmapPainter(id = R.drawable.cover_error),
                 contentDescription = title,
-                contentScale = ContentScale.Crop,
+                contentScale = if (crop) ContentScale.Crop else ContentScale.Fit,
                 alpha = if (read) 0.6f else 1f,
+                onSuccess = { state ->
+                    val image = state.result.image
+                    if (image.width > 0 && image.height > 0) {
+                        onImageRatio?.invoke(image.width.toFloat() / image.height)
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(2f / 3f)
+                    .aspectRatio(boxAspect)
                     .clip(MaterialTheme.shapes.extraSmall),
             )
 
@@ -115,7 +125,7 @@ fun MangaChapterGridItem(
                 .background(barColor),
         )
 
-        Text(
+        if (showTitle) Text(
             text = title,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
@@ -124,7 +134,7 @@ fun MangaChapterGridItem(
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (read) DISABLED_ALPHA else 1f),
             modifier = Modifier.padding(top = 4.dp),
         )
-        if (readProgress != null) {
+        if (showTitle && readProgress != null) {
             Text(
                 text = readProgress,
                 style = MaterialTheme.typography.labelSmall,
