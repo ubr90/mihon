@@ -45,9 +45,15 @@ jobs:
       - name: Report errors
         if: failure()
         run: |
-          { grep -E "^e: " build.log; grep -A4 "What went wrong" build.log | grep -v "What went wrong"; } | grep -v "^--" | head -10 | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
+          { grep -E "^e: " build.log | head -6; grep -v "^> Task\|^\s*$\|^w: " build.log | tail -25; } > err.txt
+          i=0
+          while IFS= read -r line; do
+            i=$((i+1))
+            echo "::error title=L$i::${line}"
+          done < <(head -10 err.txt)
+          # remaining lines bundled into one annotation
+          msg=$(tail -n +11 err.txt | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+          echo "::warning title=rest::${msg}"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
