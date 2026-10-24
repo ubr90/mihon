@@ -107,13 +107,28 @@ class MangaScreen(
         }
 
         val chapterGridView by viewModel.chapterGridViewPref.collectAsState()
+        val chapterGridOnly by viewModel.chapterGridOnlyPref.collectAsState()
         val chapterThumbnailRefreshedAt by viewModel.chapterThumbnailRefreshedAtPref.collectAsState()
 
         MangaScreen(
             state = successState,
             chapterGridView = chapterGridView,
+            chapterGridOnly = chapterGridOnly,
             chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
-            onToggleChapterGridView = { viewModel.chapterGridViewPref.set(!chapterGridView) },
+            onToggleChapterGridView = {
+                // list -> grid -> grid only -> list
+                when {
+                    !chapterGridView -> {
+                        viewModel.chapterGridOnlyPref.set(false)
+                        viewModel.chapterGridViewPref.set(true)
+                    }
+                    !chapterGridOnly -> viewModel.chapterGridOnlyPref.set(true)
+                    else -> {
+                        viewModel.chapterGridOnlyPref.set(false)
+                        viewModel.chapterGridViewPref.set(false)
+                    }
+                }
+            },
             snackbarHostState = viewModel.snackbarHostState,
             nextUpdate = successState.manga.expectedNextUpdate,
             isTabletUi = isTabletUi(),

@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -89,6 +91,7 @@ import kotlin.time.Instant
 fun MangaScreen(
     state: MangaViewModel.State.Success,
     chapterGridView: Boolean,
+    chapterGridOnly: Boolean,
     chapterThumbnailRefreshedAt: Long,
     onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -149,6 +152,7 @@ fun MangaScreen(
         MangaScreenSmallImpl(
             state = state,
             chapterGridView = chapterGridView,
+            chapterGridOnly = chapterGridOnly,
             chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
             onToggleChapterGridView = onToggleChapterGridView,
             snackbarHostState = snackbarHostState,
@@ -189,6 +193,7 @@ fun MangaScreen(
         MangaScreenLargeImpl(
             state = state,
             chapterGridView = chapterGridView,
+            chapterGridOnly = chapterGridOnly,
             chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
             onToggleChapterGridView = onToggleChapterGridView,
             snackbarHostState = snackbarHostState,
@@ -232,6 +237,7 @@ fun MangaScreen(
 private fun MangaScreenSmallImpl(
     state: MangaViewModel.State.Success,
     chapterGridView: Boolean,
+    chapterGridOnly: Boolean,
     chapterThumbnailRefreshedAt: Long,
     onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -294,6 +300,14 @@ private fun MangaScreenSmallImpl(
     val hasChapterThumbnails = remember(chapters, thumbnailBaseUrl) {
         chapters.any { chapterThumbnailUrl(it.chapter.url, thumbnailBaseUrl) != null }
     }
+    val showGrid = chapterGridView && hasChapterThumbnails
+    val gridOnly = showGrid && chapterGridOnly
+    val headerViewMode = when {
+        !hasChapterThumbnails -> null
+        gridOnly -> CHAPTER_VIEW_GRID_ONLY
+        showGrid -> CHAPTER_VIEW_GRID
+        else -> CHAPTER_VIEW_LIST
+    }
 
     BackHandler(enabled = isAnySelected) {
         onAllChapterSelected(false)
@@ -308,11 +322,11 @@ private fun MangaScreenSmallImpl(
                 derivedStateOf { chapterListState.firstVisibleItemScrollOffset > 0 }
             }
             val titleAlpha by animateFloatAsState(
-                if (!isFirstItemVisible) 1f else 0f,
+                if (gridOnly || !isFirstItemVisible) 1f else 0f,
                 label = "Top Bar Title",
             )
             val backgroundAlpha by animateFloatAsState(
-                if (!isFirstItemVisible || isFirstItemScrolled) 1f else 0f,
+                if (gridOnly || !isFirstItemVisible || isFirstItemScrolled) 1f else 0f,
                 label = "Top Bar Background",
             )
             MangaToolbar(
@@ -385,11 +399,12 @@ private fun MangaScreenSmallImpl(
                     state = chapterListState,
                     contentPadding = PaddingValues(
                         start = contentPadding.calculateStartPadding(layoutDirection),
+                        top = if (gridOnly) topPadding else 0.dp,
                         end = contentPadding.calculateEndPadding(layoutDirection),
                         bottom = contentPadding.calculateBottomPadding(),
                     ),
                 ) {
-                    item(
+                    if (!gridOnly) item(
                         key = MangaScreenItem.INFO_BOX,
                         contentType = MangaScreenItem.INFO_BOX,
                     ) {
@@ -404,7 +419,7 @@ private fun MangaScreenSmallImpl(
                         )
                     }
 
-                    item(
+                    if (!gridOnly) item(
                         key = MangaScreenItem.ACTION_ROW,
                         contentType = MangaScreenItem.ACTION_ROW,
                     ) {
@@ -422,7 +437,7 @@ private fun MangaScreenSmallImpl(
                         )
                     }
 
-                    item(
+                    if (!gridOnly) item(
                         key = MangaScreenItem.DESCRIPTION_WITH_TAG,
                         contentType = MangaScreenItem.DESCRIPTION_WITH_TAG,
                     ) {
@@ -446,7 +461,7 @@ private fun MangaScreenSmallImpl(
                             chapterCount = chapters.size,
                             missingChapterCount = state.missingChapterCount,
                             onClick = onFilterClicked,
-                            gridView = chapterGridView.takeIf { hasChapterThumbnails },
+                            viewMode = headerViewMode,
                             onToggleGridView = onToggleChapterGridView,
                         )
                     }
@@ -455,7 +470,7 @@ private fun MangaScreenSmallImpl(
                         manga = state.manga,
                         chapters = listItem,
                         thumbnailBaseUrl = thumbnailBaseUrl,
-                        showAsGrid = chapterGridView && hasChapterThumbnails,
+                        showAsGrid = showGrid,
                         thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                         isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                         chapterSwipeStartAction = chapterSwipeStartAction,
@@ -476,6 +491,7 @@ private fun MangaScreenSmallImpl(
 fun MangaScreenLargeImpl(
     state: MangaViewModel.State.Success,
     chapterGridView: Boolean,
+    chapterGridOnly: Boolean,
     chapterThumbnailRefreshedAt: Long,
     onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
@@ -538,6 +554,14 @@ fun MangaScreenLargeImpl(
     val thumbnailBaseUrl = remember(state.source) { (state.source as? HttpSource)?.baseUrl }
     val hasChapterThumbnails = remember(chapters, thumbnailBaseUrl) {
         chapters.any { chapterThumbnailUrl(it.chapter.url, thumbnailBaseUrl) != null }
+    }
+    val showGrid = chapterGridView && hasChapterThumbnails
+    val gridOnly = showGrid && chapterGridOnly
+    val headerViewMode = when {
+        !hasChapterThumbnails -> null
+        gridOnly -> CHAPTER_VIEW_GRID_ONLY
+        showGrid -> CHAPTER_VIEW_GRID
+        else -> CHAPTER_VIEW_LIST
     }
 
     val insetPadding = WindowInsets.systemBars.only(WindowInsetsSides.Horizontal).asPaddingValues()
@@ -618,7 +642,8 @@ fun MangaScreenLargeImpl(
                 end = insetPadding.calculateEndPadding(layoutDirection),
             ),
         ) {
-            TwoPanelBox(
+            MangaTwoPanelBox(
+                gridOnly = gridOnly,
                 modifier = Modifier.padding(
                     start = contentPadding.calculateStartPadding(layoutDirection),
                     end = contentPadding.calculateEndPadding(layoutDirection),
@@ -683,7 +708,7 @@ fun MangaScreenLargeImpl(
                                     chapterCount = chapters.size,
                                     missingChapterCount = state.missingChapterCount,
                                     onClick = onFilterButtonClicked,
-                                    gridView = chapterGridView.takeIf { hasChapterThumbnails },
+                                    viewMode = headerViewMode,
                                     onToggleGridView = onToggleChapterGridView,
                                 )
                             }
@@ -692,7 +717,8 @@ fun MangaScreenLargeImpl(
                                 manga = state.manga,
                                 chapters = listItem,
                                 thumbnailBaseUrl = thumbnailBaseUrl,
-                                showAsGrid = chapterGridView && hasChapterThumbnails,
+                                showAsGrid = showGrid,
+                                gridColumns = if (gridOnly) 6 else CHAPTER_GRID_COLUMNS,
                                 thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                                 isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                                 chapterSwipeStartAction = chapterSwipeStartAction,
@@ -760,6 +786,7 @@ private fun LazyListScope.sharedChapterItems(
     showAsGrid: Boolean,
     thumbnailRefreshedAt: Long,
     isAnyChapterSelected: Boolean,
+    gridColumns: Int = CHAPTER_GRID_COLUMNS,
     chapterSwipeStartAction: LibraryPreferences.ChapterSwipeAction,
     chapterSwipeEndAction: LibraryPreferences.ChapterSwipeAction,
     onChapterClicked: (Chapter) -> Unit,
@@ -770,6 +797,7 @@ private fun LazyListScope.sharedChapterItems(
 ) {
     if (showAsGrid) {
         sharedChapterGridItems(
+            columns = gridColumns,
             manga = manga,
             chapters = chapters,
             thumbnailBaseUrl = thumbnailBaseUrl,
@@ -843,10 +871,34 @@ private fun LazyListScope.sharedChapterItems(
     }
 }
 
+// Custom: chapter list view modes (list / grid / grid only)
+const val CHAPTER_VIEW_LIST = 0
+const val CHAPTER_VIEW_GRID = 1
+const val CHAPTER_VIEW_GRID_ONLY = 2
+
+@Composable
+private fun MangaTwoPanelBox(
+    gridOnly: Boolean,
+    startContent: @Composable BoxScope.() -> Unit,
+    endContent: @Composable BoxScope.() -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (gridOnly) {
+        Box(modifier = modifier.fillMaxSize(), content = endContent)
+    } else {
+        TwoPanelBox(
+            startContent = startContent,
+            endContent = endContent,
+            modifier = modifier,
+        )
+    }
+}
+
 private const val CHAPTER_GRID_COLUMNS = 3
 
 // Custom: chapters (volumes) as rows of cover tiles inside the existing LazyColumn
 private fun LazyListScope.sharedChapterGridItems(
+    columns: Int,
     manga: Manga,
     chapters: List<ChapterList>,
     thumbnailBaseUrl: String?,
@@ -855,7 +907,7 @@ private fun LazyListScope.sharedChapterGridItems(
     onChapterClicked: (Chapter) -> Unit,
     onChapterSelected: (ChapterList.Item, Boolean, Boolean) -> Unit,
 ) {
-    val rows = chapters.filterIsInstance<ChapterList.Item>().chunked(CHAPTER_GRID_COLUMNS)
+    val rows = chapters.filterIsInstance<ChapterList.Item>().chunked(columns)
     items(
         items = rows,
         key = { row -> "chapter-grid-${row.first().id}" },
@@ -906,7 +958,7 @@ private fun LazyListScope.sharedChapterGridItems(
                     modifier = Modifier.weight(1f),
                 )
             }
-            repeat(CHAPTER_GRID_COLUMNS - row.size) {
+            repeat(columns - row.size) {
                 Spacer(modifier = Modifier.weight(1f))
             }
         }

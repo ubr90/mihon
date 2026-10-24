@@ -49,7 +49,11 @@ class AndroidSourceManager(
             extensionManager.loadedExtensionsFlow
                 .collectLatest { extensions ->
                     val mutableMap = ConcurrentHashMap<Long, Source>(
-                        mapOf(LocalSource.ID to localSource),
+                        mapOf(
+                            LocalSource.ID to localSource,
+                            // Custom: built-in NAS (WebDAV) source
+                            mihon.feature.nas.NasSource.SOURCE_ID to mihon.feature.nas.NasSource,
+                        ),
                     )
                     extensions.forEach { extension ->
                         extension.sources.forEach {

@@ -1,0 +1,605 @@
+package mihon.feature.nas
+
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import cafe.adriel.voyager.navigator.LocalNavigator
+import cafe.adriel.voyager.navigator.currentOrThrow
+import coil3.compose.AsyncImage
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
+import dev.zacsweers.metro.AppScope
+import dev.zacsweers.metro.ContributesIntoMap
+import dev.zacsweers.metro.Inject
+import dev.zacsweers.metrox.viewmodel.ViewModelKey
+import dev.zacsweers.metrox.viewmodel.metroViewModel
+import eu.kanade.domain.chapter.interactor.SyncChaptersWithSource
+import eu.kanade.presentation.util.Screen
+import eu.kanade.tachiyomi.ui.reader.ReaderActivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+import logcat.LogPriority
+import mihon.domain.manga.model.toDomainManga
+import mihon.icons.materialsymbols.MaterialSymbols
+import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
+import mihon.icons.materialsymbols.rounded.Book
+import mihon.icons.materialsymbols.rounded.Refresh
+import mihon.icons.materialsymbols.rounded.Settings
+import mihon.icons.materialsymbols.roundedfilled.Folder
+import tachiyomi.core.common.util.system.logcat
+import tachiyomi.domain.chapter.interactor.GetChaptersByMangaId
+import tachiyomi.domain.manga.interactor.NetworkToLocalManga
+import java.io.File
+
+/**
+ * Custom: NAS (WebDAV) folder browser. Folders and zip/cbz archives are shown as tiles;
+ * tapping an archive opens it in the reader.
+ */
+class NasBrowserScreen : Screen() {
+
+    @Composable
+    override fun Content() {
+        val navigator = LocalNavigator.currentOrThrow
+        val context = LocalContext.current
+        val viewModel = metroViewModel<NasBrowserViewModel>()
+        val state by viewModel.state.collectAsState()
+        val thumbVersion by NasRuntime.thumbs.version.collectAsState()
+
+        LaunchedEffect(Unit) {
+            viewModel.events.collect { event ->
+                when (event) {
+                    is NasEvent.OpenReader -> context.startActivity(
+                        ReaderActivity.newIntent(context, event.mangaId, event.chapterId),
+                    )
+                    is NasEvent.Message -> Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+
+        BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
+
+        NasBrowserContent(
+            state = state,
+            thumbVersion = thumbVersion,
+            onBack = { if (state.stack.size > 1) viewModel.goUp() else navigator.pop() },
+            onRefresh = viewModel::reload,
+            onOpenSettings = { viewModel.showSettings(true) },
+            onOpen = viewModel::open,
+            onSetFolderThumb = viewModel::setFolderThumbnail,
+        )
+
+        if (state.showSettings) {
+            NasSettingsDialog(
+                settings = NasRuntime.settings,
+                busy = state.busy,
+                onDismiss = { viewModel.showSettings(false) },
+                onSaved = {
+                    viewModel.showSettings(false)
+                    viewModel.resetToRoot()
+                },
+                onBackup = viewModel::backup,
+                onRestore = viewModel::restore,
+            )
+        }
+    }
+}
+
+sealed interface NasEvent {
+    data class OpenReader(val mangaId: Long, val chapterId: Long) : NasEvent
+    data class Message(val text: String) : NasEvent
+}
+
+data class NasState(
+    val stack: List<String> = emptyList(),
+    val entries: List<NasEntry> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+    val showSettings: Boolean = false,
+    val busy: Boolean = false,
+) {
+    val currentPath: String? get() = stack.lastOrNull()
+}
+
+@Inject
+@ViewModelKey
+@ContributesIntoMap(AppScope::class)
+class NasBrowserViewModel(
+    private val networkToLocalManga: NetworkToLocalManga,
+    private val syncChaptersWithSource: SyncChaptersWithSource,
+    private val getChaptersByMangaId: GetChaptersByMangaId,
+) : ViewModel() {
+
+    private val settings get() = NasRuntime.settings
+    private val dav get() = NasRuntime.dav
+    private val thumbs get() = NasRuntime.thumbs
+
+    private val _state = MutableStateFlow(NasState())
+    val state: StateFlow<NasState> = _state.asStateFlow()
+
+    private val eventChannel = Channel<NasEvent>(Channel.BUFFERED)
+    val events = eventChannel.receiveAsFlow()
+
+    /** Folders already checked for a thumbnail image during this session. */
+    private val probed = mutableSetOf<String>()
+    private val probeLimit = Semaphore(4)
+
+    init {
+        if (settings.isConfigured) resetToRoot() else showSettings(true)
+    }
+
+    fun showSettings(show: Boolean) = _state.update { it.copy(showSettings = show) }
+
+    fun resetToRoot() {
+        probed.clear()
+        _state.update { it.copy(stack = listOf(settings.rootPath)) }
+        reload()
+    }
+
+    fun goUp() {
+        _state.update { it.copy(stack = it.stack.dropLast(1)) }
+        reload()
+    }
+
+    fun reload() {
+        val path = _state.value.currentPath ?: return
+        if (!settings.isConfigured) return
+        _state.update { it.copy(loading = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val thumbName = settings.thumbName
+                val list = withContext(Dispatchers.IO) { dav.list(path) }
+                val visible = list
+                    .filterNot { it.name.equals(thumbName, ignoreCase = true) }
+                    .filterNot { it.name.startsWith(".") || it.name.startsWith("@") || it.name.startsWith("#") }
+                    .filter { it.isDirectory || isArchiveName(it.name) }
+                    .sortedWith(compareBy<NasEntry> { !it.isDirectory }.thenBy(NaturalOrder) { it.name })
+                if (_state.value.currentPath != path) return@launch
+                _state.update { it.copy(entries = visible, loading = false) }
+
+                // Thumbnail image inside the current folder counts for this folder
+                if (!thumbs.has(path, folder = true) && list.any { it.name.equals(thumbName, true) }) {
+                    probeFolder(path)
+                }
+                visible.filter { it.isDirectory }.forEach { probeFolder(it.path) }
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR, e) { "NAS list failed" }
+                _state.update { it.copy(loading = false, error = e.message ?: e.toString()) }
+            }
+        }
+    }
+
+    /** Rule 1: a thumbnail image file inside the folder. */
+    private fun probeFolder(folderPath: String) {
+        if (thumbs.has(folderPath, folder = true) || !probed.add(folderPath)) return
+        viewModelScope.launch(Dispatchers.IO) {
+            probeLimit.withPermit {
+                runCatching {
+                    dav.get(childPath(folderPath, settings.thumbName))?.let { bytes ->
+                        thumbs.put(folderPath, folder = true, imageBytes = bytes)
+                    }
+                }
+            }
+        }
+    }
+
+    fun open(entry: NasEntry) {
+        if (entry.isDirectory) {
+            _state.update { it.copy(stack = it.stack + entry.path, entries = emptyList()) }
+            reload()
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val (mangaId, chapterId) = withContext(Dispatchers.IO) {
+                    val folder = parentPath(entry.path)
+                    val manga = networkToLocalManga(
+                        NasSource.mangaFor(folder).toDomainManga(NasSource.SOURCE_ID),
+                    )
+                    syncChaptersWithSource.await(NasSource.chaptersFor(folder), manga, NasSource)
+                    val chapter = getChaptersByMangaId.await(manga.id).first { it.url == entry.path }
+                    manga.id to chapter.id
+                }
+                eventChannel.send(NasEvent.OpenReader(mangaId, chapterId))
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR, e) { "NAS open failed" }
+                eventChannel.send(NasEvent.Message("열기 실패: ${e.message}"))
+            }
+        }
+    }
+
+    fun setFolderThumbnail(entry: NasEntry) {
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val bytes = NasRuntime.createArchiveThumbnail(entry.path) ?: error("이미지가 없어요")
+                    thumbs.put(parentPath(entry.path), folder = true, imageBytes = bytes, alreadyThumbnail = true)
+                }
+                eventChannel.send(NasEvent.Message("폴더 썸네일로 지정했어요"))
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("지정 실패: ${e.message}"))
+            }
+        }
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
+    private val itemsSerializer = ListSerializer(NasThumbStore.Item.serializer())
+
+    private fun backupFile(item: NasThumbStore.Item): String {
+        val base = settings.backupPath
+        return if (item.folder) childPath(base + item.path, settings.thumbName) else base + item.path + ".jpg"
+    }
+
+    fun backup() {
+        val base = settings.backupPath
+        if (base.isEmpty()) return
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                val count = withContext(Dispatchers.IO) {
+                    val created = mutableSetOf<String>()
+                    val items = thumbs.all()
+                    items.forEach { (item, file) ->
+                        val target = backupFile(item)
+                        dav.mkdirs(parentPath(target), created)
+                        dav.put(target, file.readBytes(), "image/jpeg")
+                    }
+                    dav.mkdirs(base, created)
+                    dav.put(
+                        childPath(base, "index.json"),
+                        json.encodeToString(itemsSerializer, items.map { it.first }).toByteArray(),
+                        "application/json",
+                    )
+                    items.size
+                }
+                eventChannel.send(NasEvent.Message("썸네일 ${count}개 백업 완료"))
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR, e) { "NAS backup failed" }
+                eventChannel.send(NasEvent.Message("백업 실패: ${e.message}"))
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    fun restore() {
+        val base = settings.backupPath
+        if (base.isEmpty()) return
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                val count = withContext(Dispatchers.IO) {
+                    val index = dav.get(childPath(base, "index.json")) ?: error("백업이 없어요")
+                    val items = json.decodeFromString(itemsSerializer, index.decodeToString())
+                    var n = 0
+                    items.forEach { item ->
+                        runCatching {
+                            dav.get(backupFile(item))?.let {
+                                thumbs.put(item.path, item.folder, it, alreadyThumbnail = true)
+                                n++
+                            }
+                        }
+                    }
+                    n
+                }
+                eventChannel.send(NasEvent.Message("썸네일 ${count}개 복원 완료"))
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("복원 실패: ${e.message}"))
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NasBrowserContent(
+    state: NasState,
+    thumbVersion: Long,
+    onBack: () -> Unit,
+    onRefresh: () -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpen: (NasEntry) -> Unit,
+    onSetFolderThumb: (NasEntry) -> Unit,
+) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        text = state.currentPath?.let { fileName(it) }?.ifEmpty { null } ?: "NAS",
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(MaterialSymbols.AutoMirroredRounded.ArrowBack, contentDescription = null)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onRefresh) {
+                        Icon(MaterialSymbols.Rounded.Refresh, contentDescription = null)
+                    }
+                    IconButton(onClick = onOpenSettings) {
+                        Icon(MaterialSymbols.Rounded.Settings, contentDescription = null)
+                    }
+                },
+            )
+        },
+    ) { padding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding),
+        ) {
+            when {
+                state.loading && state.entries.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                state.error != null -> Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("불러오지 못했어요\n${state.error}", textAlign = TextAlign.Center)
+                    TextButton(onClick = onRefresh) { Text("다시 시도") }
+                }
+                state.currentPath == null -> TextButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier.align(Alignment.Center),
+                ) { Text("NAS 설정하기") }
+                else -> LazyVerticalGrid(
+                    columns = GridCells.Adaptive(112.dp),
+                    contentPadding = PaddingValues(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.entries, key = { it.path }) { entry ->
+                        NasTile(
+                            entry = entry,
+                            thumbVersion = thumbVersion,
+                            onClick = { onOpen(entry) },
+                            onSetFolderThumb = { onSetFolderThumb(entry) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun NasTile(
+    entry: NasEntry,
+    thumbVersion: Long,
+    onClick: () -> Unit,
+    onSetFolderThumb: () -> Unit,
+) {
+    val context = LocalContext.current
+    var menu by remember { mutableStateOf(false) }
+    val thumb: File? = remember(entry.path, thumbVersion) {
+        NasRuntime.thumbs.get(entry.path, folder = entry.isDirectory)
+    }
+    Column(
+        modifier = Modifier
+            .clip(MaterialTheme.shapes.small)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = { if (!entry.isDirectory) menu = true },
+            )
+            .padding(4.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(2f / 3f)
+                .clip(MaterialTheme.shapes.extraSmall)
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (thumb != null) {
+                AsyncImage(
+                    model = ImageRequest.Builder(context)
+                        .data(thumb)
+                        .memoryCacheKey("${thumb.path}:${thumb.lastModified()}")
+                        .diskCachePolicy(CachePolicy.DISABLED)
+                        .build(),
+                    contentDescription = entry.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Icon(
+                    imageVector = if (entry.isDirectory) MaterialSymbols.RoundedFilled.Folder else MaterialSymbols.Rounded.Book,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(48.dp),
+                )
+            }
+            DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+                DropdownMenuItem(
+                    text = { Text("폴더 썸네일로 지정") },
+                    onClick = {
+                        menu = false
+                        onSetFolderThumb()
+                    },
+                )
+            }
+        }
+        Text(
+            text = if (entry.isDirectory) entry.name else entry.name.substringBeforeLast('.'),
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            minLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun NasSettingsDialog(
+    settings: NasSettings,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
+) {
+    var server by remember { mutableStateOf(settings.serverUrl) }
+    var user by remember { mutableStateOf(settings.username) }
+    var password by remember { mutableStateOf(settings.password) }
+    var root by remember { mutableStateOf(settings.rootPath) }
+    var thumbName by remember { mutableStateOf(settings.thumbName) }
+    var backup by remember { mutableStateOf(settings.backupPath) }
+
+    fun save() {
+        settings.serverUrl = server
+        settings.username = user
+        settings.password = password
+        settings.rootPath = root
+        settings.thumbName = thumbName
+        settings.backupPath = backup
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("NAS 설정") },
+        text = {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                OutlinedTextField(
+                    value = server,
+                    onValueChange = { server = it },
+                    label = { Text("WebDAV 주소") },
+                    placeholder = { Text("https://주소:5006") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                )
+                OutlinedTextField(user, { user = it }, label = { Text("아이디") }, singleLine = true)
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("비밀번호") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+                OutlinedTextField(
+                    value = root,
+                    onValueChange = { root = it },
+                    label = { Text("시작 폴더") },
+                    placeholder = { Text("/pComic/comic") },
+                    singleLine = true,
+                )
+                OutlinedTextField(
+                    value = thumbName,
+                    onValueChange = { thumbName = it },
+                    label = { Text("썸네일 파일명") },
+                    placeholder = { Text(NasSettings.DEFAULT_THUMB_NAME) },
+                    singleLine = true,
+                )
+                HorizontalDivider()
+                OutlinedTextField(
+                    value = backup,
+                    onValueChange = { backup = it },
+                    label = { Text("썸네일 백업 폴더") },
+                    placeholder = { Text("/pComic/_thumbs") },
+                    singleLine = true,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = !busy && backup.isNotBlank(),
+                        onClick = {
+                            save()
+                            onBackup()
+                        },
+                    ) { Text("백업하기") }
+                    OutlinedButton(
+                        enabled = !busy && backup.isNotBlank(),
+                        onClick = {
+                            save()
+                            onRestore()
+                        },
+                    ) { Text("복원하기") }
+                }
+                if (busy) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                save()
+                onSaved()
+            }) { Text("저장") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("닫기") }
+        },
+    )
+}

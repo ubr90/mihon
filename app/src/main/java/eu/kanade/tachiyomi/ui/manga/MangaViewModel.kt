@@ -173,6 +173,7 @@ class MangaViewModel(
     val chapterSwipeStartAction = libraryPreferences.swipeToEndAction.get()
     val chapterSwipeEndAction = libraryPreferences.swipeToStartAction.get()
     val chapterGridViewPref = libraryPreferences.chapterGridView
+    val chapterGridOnlyPref = libraryPreferences.chapterGridOnly
     val chapterThumbnailRefreshedAtPref = libraryPreferences.chapterThumbnailRefreshedAt(mangaId)
     var autoTrackState = trackPreferences.autoUpdateTrackOnMarkRead.get()
 

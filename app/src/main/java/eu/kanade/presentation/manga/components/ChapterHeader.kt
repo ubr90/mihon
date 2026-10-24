@@ -17,6 +17,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredroundedfilled.ViewList
+import mihon.icons.materialsymbols.roundedfilled.ViewCompact
 import mihon.icons.materialsymbols.roundedfilled.ViewModule
 import tachiyomi.i18n.MR
 import tachiyomi.presentation.core.components.material.SECONDARY_ALPHA
@@ -31,7 +32,7 @@ fun ChapterHeader(
     missingChapterCount: Int,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    gridView: Boolean? = null,
+    viewMode: Int? = null,
     onToggleGridView: (() -> Unit)? = null,
 ) {
     Row(
@@ -50,13 +51,14 @@ fun ChapterHeader(
         ) {
             ChapterHeaderText(chapterCount, missingChapterCount)
         }
-        if (gridView != null && onToggleGridView != null) {
+        if (viewMode != null && onToggleGridView != null) {
+            // Icon shows the mode the button switches to: list -> grid -> grid only -> list
             IconButton(onClick = onToggleGridView, enabled = enabled) {
                 Icon(
-                    imageVector = if (gridView) {
-                        MaterialSymbols.AutoMirroredRoundedFilled.ViewList
-                    } else {
-                        MaterialSymbols.RoundedFilled.ViewModule
+                    imageVector = when (viewMode) {
+                        0 -> MaterialSymbols.RoundedFilled.ViewModule
+                        1 -> MaterialSymbols.RoundedFilled.ViewCompact
+                        else -> MaterialSymbols.AutoMirroredRoundedFilled.ViewList
                     },
                     contentDescription = null,
                 )

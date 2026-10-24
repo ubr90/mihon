@@ -216,6 +216,9 @@ class LibraryPreferences(
     // Custom: show chapters (volumes) as a cover grid when the source provides per-chapter thumbnails (Komga)
     val chapterGridView: Preference<Boolean> = preferenceStore.getBoolean("pref_chapter_grid_view", true)
 
+    // Custom: grid only (hide cover/description panel) when grid view is on
+    val chapterGridOnly: Preference<Boolean> = preferenceStore.getBoolean("pref_chapter_grid_only", false)
+
     // Custom: last manual refresh per manga, used to bust cached chapter thumbnails
     fun chapterThumbnailRefreshedAt(mangaId: Long): Preference<Long> =
         preferenceStore.getLong("pref_chapter_thumb_refresh_$mangaId", 0L)
