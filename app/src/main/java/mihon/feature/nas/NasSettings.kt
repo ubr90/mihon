@@ -44,6 +44,11 @@ class NasSettings(context: Context) {
         get() = prefs.getInt(KEY_THUMB_SIZE, 700)
         set(value) = prefs.edit { putInt(KEY_THUMB_SIZE, value) }
 
+    /** Folder path stack of the browser, kept so going back works after the screen is recreated. */
+    var lastStack: List<String>
+        get() = prefs.getString(KEY_LAST_STACK, "").orEmpty().split('\n').filter { it.isNotEmpty() }
+        set(value) = prefs.edit { putString(KEY_LAST_STACK, value.joinToString("\n")) }
+
     val isConfigured: Boolean
         get() = serverUrl.startsWith("http://") || serverUrl.startsWith("https://")
 
@@ -55,6 +60,7 @@ class NasSettings(context: Context) {
         private const val KEY_THUMB_NAME = "thumb_name"
         private const val KEY_BACKUP = "backup"
         private const val KEY_THUMB_SIZE = "thumb_size"
+        private const val KEY_LAST_STACK = "last_stack"
         const val DEFAULT_THUMB_NAME = "_thumb.jpg"
 
         fun normalizePath(path: String): String {

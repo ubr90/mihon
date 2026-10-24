@@ -201,19 +201,37 @@ class NasBrowserViewModel(
     private val probeLimit = Semaphore(4)
 
     init {
-        if (settings.isConfigured) resetToRoot() else showSettings(true)
+        when {
+            !settings.isConfigured -> showSettings(true)
+            else -> {
+                // Restore the folder path from the last visit (the screen can be recreated while reading)
+                val root = settings.rootPath
+                val saved = settings.lastStack.filter { it == root || it.startsWith("$root/") || root == "/" }
+                if (saved.firstOrNull() == root) {
+                    _state.update { it.copy(stack = saved) }
+                    reload()
+                } else {
+                    resetToRoot()
+                }
+            }
+        }
+    }
+
+    private fun setStack(stack: List<String>) {
+        settings.lastStack = stack
+        _state.update { it.copy(stack = stack) }
     }
 
     fun showSettings(show: Boolean) = _state.update { it.copy(showSettings = show) }
 
     fun resetToRoot() {
         probed.clear()
-        _state.update { it.copy(stack = listOf(settings.rootPath)) }
+        setStack(listOf(settings.rootPath))
         reload()
     }
 
     fun goUp() {
-        _state.update { it.copy(stack = it.stack.dropLast(1)) }
+        setStack(_state.value.stack.dropLast(1))
         reload()
     }
 
@@ -261,7 +279,8 @@ class NasBrowserViewModel(
 
     fun open(entry: NasEntry) {
         if (entry.isDirectory) {
-            _state.update { it.copy(stack = it.stack + entry.path, entries = emptyList()) }
+            setStack(_state.value.stack + entry.path)
+            _state.update { it.copy(entries = emptyList()) }
             reload()
             return
         }
