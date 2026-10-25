@@ -43,6 +43,7 @@ import eu.kanade.tachiyomi.ui.updates.UpdatesTab
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 import mihon.app.di.appGraph
@@ -89,14 +90,18 @@ object HomeScreen : Screen() {
                 }
                 val navigationSuiteState = rememberNavigationSuiteScaffoldState()
                 LaunchedEffect(navigationSuiteState, tabletUi) {
-                    if (tabletUi) navigationSuiteState.show()
-                    showBottomNavEvent.receiveAsFlow().collectLatest { show ->
-                        if (tabletUi || show) {
-                            navigationSuiteState.show()
-                        } else {
-                            navigationSuiteState.hide()
+                    // Custom: the ☰ toggle can keep the tab bar hidden
+                    kotlinx.coroutines.flow.combine(
+                        mihon.feature.grid.NavBarToggle.visible,
+                        showBottomNavEvent.receiveAsFlow().onStart { emit(true) },
+                    ) { visible, show -> visible && (tabletUi || show) }
+                        .collectLatest { show ->
+                            if (show) {
+                                navigationSuiteState.show()
+                            } else {
+                                navigationSuiteState.hide()
+                            }
                         }
-                    }
                 }
 
                 NavigationSuiteScaffold(
@@ -122,7 +127,11 @@ object HomeScreen : Screen() {
                         label = "tabContent",
                     ) {
                         tabNavigator.saveableState(key = "currentTab", it) {
-                            it.Content()
+                            CompositionLocalProvider(
+                                mihon.feature.grid.LocalNavBarToggle provides mihon.feature.grid.NavBarToggle::toggle,
+                            ) {
+                                it.Content()
+                            }
                         }
                     }
                 }

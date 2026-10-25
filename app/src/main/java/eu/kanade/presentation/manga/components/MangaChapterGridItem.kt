@@ -151,6 +151,10 @@ private val KomgaBookRegex = Regex("""^(.*?/api/v1/books/[^/?#]+)""")
  * Custom: returns the thumbnail URL of a chapter when it points to a Komga book, otherwise null.
  */
 fun chapterThumbnailUrl(chapterUrl: String, baseUrl: String?): String? {
+    // Custom: NAS archives (chapter url is the archive path) use their saved thumbnail
+    if (chapterUrl.startsWith("/") && mihon.feature.nas.isArchiveName(chapterUrl)) {
+        return mihon.feature.nas.NasRuntime.thumbs.get(chapterUrl, folder = false)?.let { "file://" + it.path }
+    }
     val match = KomgaBookRegex.find(chapterUrl) ?: return null
     val bookUrl = match.groupValues[1]
     val absolute = when {

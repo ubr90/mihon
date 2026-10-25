@@ -675,14 +675,15 @@ class ReaderActivity : BaseActivity() {
             val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                 runCatching {
                     val bytes = mihon.feature.nas.NasSource.pageBytes(page)
+                    // The archive's own thumbnail (folder thumbnails are set from the NAS list)
                     mihon.feature.nas.NasRuntime.thumbs.put(
-                        mihon.feature.nas.parentPath(chapter.chapter.url),
-                        folder = true,
+                        chapter.chapter.url,
+                        folder = false,
                         imageBytes = bytes,
                     )
                 }
             }
-            toast(ok.fold({ "폴더 썸네일로 지정했어요" }, { "지정하지 못했어요: ${it.message}" }))
+            toast(ok.fold({ "파일 표지로 지정했어요" }, { "지정하지 못했어요: ${it.message}" }))
         }
     }
 

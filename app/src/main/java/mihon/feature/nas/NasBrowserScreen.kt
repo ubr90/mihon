@@ -86,6 +86,7 @@ import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
 import mihon.icons.materialsymbols.rounded.Book
 import mihon.icons.materialsymbols.rounded.Code
+import mihon.icons.materialsymbols.rounded.DragHandle
 import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.Settings
 import mihon.icons.materialsymbols.rounded.Storage
@@ -144,7 +145,22 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
             onOpenSettings = { viewModel.showSettings(true) },
             onOpen = viewModel::open,
             onSetFolderThumb = viewModel::setFolderThumbnail,
+            onFolderLongPress = viewModel::onFolderLongPress,
         )
+
+        state.libraryPrompt?.let { prompt ->
+            AlertDialog(
+                onDismissRequest = viewModel::dismissLibraryPrompt,
+                title = { Text(fileName(prompt.entry.path)) },
+                text = { Text(if (prompt.inLibrary) "서재에서 제거할까요?" else "서재에 추가할까요?") },
+                confirmButton = {
+                    TextButton(onClick = { viewModel.confirmLibrary(prompt) }) {
+                        Text(if (prompt.inLibrary) "서재에서 제거" else "서재에 추가")
+                    }
+                },
+                dismissButton = { TextButton(onClick = viewModel::dismissLibraryPrompt) { Text("취소") } },
+            )
+        }
 
         if (state.showSettings) {
             NasSettingsDialog(
@@ -163,6 +179,8 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
     }
 }
 
+data class LibraryPrompt(val entry: NasEntry, val mangaId: Long, val inLibrary: Boolean)
+
 sealed interface NasEvent {
     data class OpenReader(val mangaId: Long, val chapterId: Long) : NasEvent
     data class Message(val text: String) : NasEvent
@@ -174,6 +192,7 @@ data class NasState(
     val loading: Boolean = false,
     val error: String? = null,
     val showSettings: Boolean = false,
+    val libraryPrompt: LibraryPrompt? = null,
     val busy: Boolean = false,
 ) {
     val currentPath: String? get() = stack.lastOrNull()
@@ -186,6 +205,8 @@ class NasBrowserViewModel(
     private val networkToLocalManga: NetworkToLocalManga,
     private val syncChaptersWithSource: SyncChaptersWithSource,
     private val getChaptersByMangaId: GetChaptersByMangaId,
+    private val updateManga: eu.kanade.domain.manga.interactor.UpdateManga,
+    private val coverCache: eu.kanade.tachiyomi.data.cache.CoverCache,
 ) : ViewModel() {
 
     private val settings get() = NasRuntime.settings
@@ -305,6 +326,53 @@ class NasBrowserViewModel(
         }
     }
 
+    /** Long-press on a folder with a thumbnail: offer adding it (as a series) to the library. */
+    fun onFolderLongPress(entry: NasEntry) {
+        viewModelScope.launch {
+            try {
+                val prompt = withContext(Dispatchers.IO) {
+                    val chapters = NasSource.chaptersFor(entry.path)
+                    if (chapters.isEmpty()) return@withContext null
+                    val manga = networkToLocalManga(NasSource.mangaFor(entry.path).toDomainManga(NasSource.SOURCE_ID))
+                    LibraryPrompt(entry, manga.id, manga.favorite)
+                }
+                if (prompt == null) {
+                    eventChannel.send(NasEvent.Message("zip 파일이 없는 폴더예요"))
+                } else {
+                    _state.update { it.copy(libraryPrompt = prompt) }
+                }
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("확인 실패: ${e.message}"))
+            }
+        }
+    }
+
+    fun dismissLibraryPrompt() = _state.update { it.copy(libraryPrompt = null) }
+
+    fun confirmLibrary(prompt: LibraryPrompt) {
+        _state.update { it.copy(libraryPrompt = null) }
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val folder = prompt.entry.path
+                    val manga = networkToLocalManga(NasSource.mangaFor(folder).toDomainManga(NasSource.SOURCE_ID))
+                    if (prompt.inLibrary) {
+                        updateManga.awaitUpdateFavorite(manga.id, false)
+                    } else {
+                        syncChaptersWithSource.await(NasSource.chaptersFor(folder), manga, NasSource)
+                        // Library cover = the folder's NAS thumbnail
+                        thumbs.get(folder, folder = true)?.inputStream()?.use { coverCache.setCustomCoverToCache(manga, it) }
+                        updateManga.awaitUpdateCoverLastModified(manga.id)
+                        updateManga.awaitUpdateFavorite(manga.id, true)
+                    }
+                }
+                eventChannel.send(NasEvent.Message(if (prompt.inLibrary) "서재에서 제거했어요" else "서재에 추가했어요"))
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("실패: ${e.message}"))
+            }
+        }
+    }
+
     fun setFolderThumbnail(entry: NasEntry) {
         viewModelScope.launch {
             try {
@@ -409,6 +477,7 @@ private fun NasBrowserContent(
     onOpenSettings: () -> Unit,
     onOpen: (NasEntry) -> Unit,
     onSetFolderThumb: (NasEntry) -> Unit,
+    onFolderLongPress: (NasEntry) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -421,9 +490,16 @@ private fun NasBrowserContent(
                     )
                 },
                 navigationIcon = {
-                    if (showBack) {
-                        IconButton(onClick = onBack) {
-                            Icon(MaterialSymbols.AutoMirroredRounded.ArrowBack, contentDescription = null)
+                    Row {
+                        mihon.feature.grid.LocalNavBarToggle.current?.let { toggle ->
+                            IconButton(onClick = toggle) {
+                                Icon(MaterialSymbols.Rounded.DragHandle, contentDescription = null)
+                            }
+                        }
+                        if (showBack) {
+                            IconButton(onClick = onBack) {
+                                Icon(MaterialSymbols.AutoMirroredRounded.ArrowBack, contentDescription = null)
+                            }
                         }
                     }
                 },
@@ -514,6 +590,7 @@ private fun NasBrowserContent(
                                 crop = crop,
                                 onClick = { onOpen(entry) },
                                 onSetFolderThumb = { onSetFolderThumb(entry) },
+                                onFolderLongPress = { onFolderLongPress(entry) },
                                 modifier = modifier,
                             )
                         }
@@ -534,6 +611,7 @@ private fun NasTile(
     crop: Boolean,
     onClick: () -> Unit,
     onSetFolderThumb: () -> Unit,
+    onFolderLongPress: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -546,7 +624,13 @@ private fun NasTile(
             .clip(MaterialTheme.shapes.small)
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = { if (!entry.isDirectory) menu = true },
+                onLongClick = {
+                    when {
+                        !entry.isDirectory -> menu = true
+                        // Library entry only for folders that have a thumbnail (zip check happens next)
+                        thumb != null -> onFolderLongPress()
+                    }
+                },
             )
     ) {
         Box(

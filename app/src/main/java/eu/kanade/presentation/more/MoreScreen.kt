@@ -9,6 +9,7 @@ import eu.kanade.presentation.more.settings.widget.SwitchPreferenceWidget
 import eu.kanade.presentation.more.settings.widget.TextPreferenceWidget
 import eu.kanade.tachiyomi.ui.more.DownloadQueueState
 import mihon.icons.materialsymbols.MaterialSymbols
+import mihon.icons.materialsymbols.rounded.DragHandle
 import mihon.icons.materialsymbols.automirroredrounded.Help
 import mihon.icons.materialsymbols.automirroredrounded.Label
 import mihon.icons.materialsymbols.rounded.CloudOff
@@ -42,9 +43,21 @@ fun MoreScreen(
     onClickAbout: () -> Unit,
 ) {
     val uriHandler = LocalUriHandler.current
+    val navToggle = mihon.feature.grid.LocalNavBarToggle.current
 
     Scaffold { contentPadding ->
         ScrollbarLazyColumn(contentPadding = contentPadding) {
+            // Custom: show/hide the main tab bar
+            navToggle?.let { toggle ->
+                item {
+                    androidx.compose.material3.IconButton(onClick = toggle) {
+                        androidx.compose.material3.Icon(
+                            imageVector = MaterialSymbols.Rounded.DragHandle,
+                            contentDescription = null,
+                        )
+                    }
+                }
+            }
             item {
                 LogoHeader(
                     iconPadding = PaddingValues(vertical = 32.dp),

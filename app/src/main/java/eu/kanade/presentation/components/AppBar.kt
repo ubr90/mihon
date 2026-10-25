@@ -53,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.flow.drop
 import mihon.icons.materialsymbols.MaterialSymbols
+import mihon.icons.materialsymbols.rounded.DragHandle
 import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
 import mihon.icons.materialsymbols.rounded.Close
 import mihon.icons.materialsymbols.rounded.MoreVert
@@ -144,9 +145,18 @@ fun AppBar(
                         )
                     }
                 } else {
-                    navigateUp?.let {
-                        IconButton(onClick = it) {
+                    val navToggle = mihon.feature.grid.LocalNavBarToggle.current
+                    if (navigateUp != null) {
+                        IconButton(onClick = navigateUp) {
                             UpIcon(navigationIcon = navigationIcon)
+                        }
+                    } else if (navToggle != null) {
+                        // Custom: show/hide the main tab bar
+                        IconButton(onClick = navToggle) {
+                            Icon(
+                                imageVector = MaterialSymbols.Rounded.DragHandle,
+                                contentDescription = null,
+                            )
                         }
                     }
                 }
