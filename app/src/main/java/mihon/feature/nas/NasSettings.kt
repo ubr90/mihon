@@ -49,6 +49,16 @@ class NasSettings(context: Context) {
         get() = prefs.getString(KEY_LAST_STACK, "").orEmpty().split('\n').filter { it.isNotEmpty() }
         set(value) = prefs.edit { putString(KEY_LAST_STACK, value.joinToString("\n")) }
 
+    /** Favorite NAS folder paths (in the order they were added). */
+    var favorites: List<String>
+        get() = prefs.getString(KEY_FAVORITES, "").orEmpty().split('\n').filter { it.isNotEmpty() }
+        set(value) = prefs.edit { putString(KEY_FAVORITES, value.joinToString("\n")) }
+
+    /** Restore: download only thumbnails/metadata the phone does not have yet. */
+    var restoreMissingOnly: Boolean
+        get() = prefs.getBoolean(KEY_RESTORE_MISSING_ONLY, true)
+        set(value) = prefs.edit { putBoolean(KEY_RESTORE_MISSING_ONLY, value) }
+
     val isConfigured: Boolean
         get() = serverUrl.startsWith("http://") || serverUrl.startsWith("https://")
 
@@ -61,6 +71,8 @@ class NasSettings(context: Context) {
         private const val KEY_BACKUP = "backup"
         private const val KEY_THUMB_SIZE = "thumb_size"
         private const val KEY_LAST_STACK = "last_stack"
+        private const val KEY_FAVORITES = "favorites"
+        private const val KEY_RESTORE_MISSING_ONLY = "restore_missing_only"
         const val DEFAULT_THUMB_NAME = "000_cover.jpeg"
 
         fun normalizePath(path: String): String {

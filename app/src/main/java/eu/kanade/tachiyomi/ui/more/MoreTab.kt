@@ -61,6 +61,7 @@ data object MoreTab : Tab {
     @Composable
     override fun Content() {
         val navigator = LocalNavigator.currentOrThrow
+        val tabNavigator = LocalTabNavigator.current
         val viewModel = metroViewModel<MoreViewModel>()
         val downloadQueueState by viewModel.downloadQueueState.collectAsState()
         MoreScreen(
@@ -69,6 +70,8 @@ data object MoreTab : Tab {
             onDownloadedOnlyChange = { viewModel.downloadedOnly = it },
             incognitoMode = viewModel.incognitoMode,
             onIncognitoModeChange = { viewModel.incognitoMode = it },
+            onClickUpdates = { tabNavigator.current = eu.kanade.tachiyomi.ui.updates.UpdatesTab },
+            onClickBrowse = { tabNavigator.current = eu.kanade.tachiyomi.ui.browse.BrowseTab },
             onClickDownloadQueue = { navigator.push(DownloadQueueScreen) },
             onClickCategories = { navigator.push(CategoryScreen()) },
             onClickStats = { navigator.push(StatsScreen()) },

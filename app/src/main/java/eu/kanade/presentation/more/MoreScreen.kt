@@ -9,6 +9,8 @@ import eu.kanade.presentation.more.settings.widget.SwitchPreferenceWidget
 import eu.kanade.presentation.more.settings.widget.TextPreferenceWidget
 import eu.kanade.tachiyomi.ui.more.DownloadQueueState
 import mihon.icons.materialsymbols.MaterialSymbols
+import mihon.icons.materialsymbols.rounded.Explore
+import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.DragHandle
 import mihon.icons.materialsymbols.automirroredrounded.Help
 import mihon.icons.materialsymbols.automirroredrounded.Label
@@ -34,6 +36,8 @@ fun MoreScreen(
     onDownloadedOnlyChange: (Boolean) -> Unit,
     incognitoMode: Boolean,
     onIncognitoModeChange: (Boolean) -> Unit,
+    onClickUpdates: () -> Unit,
+    onClickBrowse: () -> Unit,
     onClickDownloadQueue: () -> Unit,
     onClickCategories: () -> Unit,
     onClickStats: () -> Unit,
@@ -83,6 +87,22 @@ fun MoreScreen(
             }
 
             item { HorizontalDivider() }
+
+            // Custom: updates and browse were moved here from the tab bar
+            item {
+                TextPreferenceWidget(
+                    title = stringResource(MR.strings.label_recent_updates),
+                    icon = MaterialSymbols.Rounded.Refresh,
+                    onPreferenceClick = onClickUpdates,
+                )
+            }
+            item {
+                TextPreferenceWidget(
+                    title = stringResource(MR.strings.browse),
+                    icon = MaterialSymbols.Rounded.Explore,
+                    onPreferenceClick = onClickBrowse,
+                )
+            }
 
             item {
                 val downloadQueueState = downloadQueueStateProvider()

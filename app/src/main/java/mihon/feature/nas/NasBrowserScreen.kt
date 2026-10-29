@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -32,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.PrimaryTabRow
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -69,6 +71,8 @@ import eu.kanade.domain.chapter.interactor.SyncChaptersWithSource
 import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.ui.reader.ReaderActivity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -183,9 +187,20 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
                     // Only go back to the start folder when the server or start folder changed
                     if (connectionChanged || state.currentPath == null) viewModel.resetToRoot() else viewModel.reload()
                 },
-                onBackup = viewModel::backup,
-                onRestore = viewModel::restore,
+                onBackup = viewModel::startBackup,
+                onRestore = viewModel::startRestore,
             )
+        }
+
+        state.selection?.let { selection ->
+            NasFolderSelectDialog(
+                selection = selection,
+                onConfirm = viewModel::confirmSelection,
+                onDismiss = viewModel::dismissSelection,
+            )
+        }
+        state.progress?.let { progress ->
+            NasProgressDialog(progress = progress, onCancel = viewModel::cancelJob)
         }
     }
 }
@@ -205,6 +220,8 @@ data class NasState(
     val showSettings: Boolean = false,
     val libraryPrompt: LibraryPrompt? = null,
     val busy: Boolean = false,
+    val selection: NasSelection? = null,
+    val progress: NasProgress? = null,
 ) {
     val currentPath: String? get() = stack.lastOrNull()
 }
@@ -236,6 +253,17 @@ class NasBrowserViewModel(
     private val probeLimit = Semaphore(4)
 
     init {
+        // Favorites tab asks to open a folder
+        viewModelScope.launch {
+            NasRuntime.pendingJump.collect { stack ->
+                if (stack != null && settings.isConfigured) {
+                    NasRuntime.pendingJump.value = null
+                    setStack(stack)
+                    _state.update { it.copy(entries = emptyList()) }
+                    reload()
+                }
+            }
+        }
         when {
             !settings.isConfigured -> showSettings(true)
             else -> {
@@ -415,59 +443,31 @@ class NasBrowserViewModel(
         return if (item.folder) childPath(base + item.path, settings.thumbName) else base + item.path + ".jpg"
     }
 
-    fun backup() {
-        val base = settings.backupPath
-        if (base.isEmpty()) return
-        _state.update { it.copy(busy = true) }
-        viewModelScope.launch {
-            try {
-                val count = withContext(Dispatchers.IO) {
-                    val created = mutableSetOf<String>()
-                    val items = thumbs.all()
-                    items.forEach { (item, file) ->
-                        val target = backupFile(item)
-                        dav.mkdirs(parentPath(target), created)
-                        dav.put(target, file.readBytes(), "image/jpeg")
-                    }
-                    dav.mkdirs(base, created)
-                    // Merge with the index already on the NAS (PC tool results, other phones) instead of replacing it
-                    val indexPath = childPath(base, "index.json")
-                    val existing = dav.get(indexPath)?.let {
-                        runCatching { json.parseToJsonElement(it.decodeToString()) as? JsonArray }.getOrNull()
-                    } ?: JsonArray(emptyList())
-                    val seen = existing.mapNotNull { element ->
-                        val obj = element as? JsonObject ?: return@mapNotNull null
-                        val path = (obj["path"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
-                        val folder = (obj["folder"] as? JsonPrimitive)?.booleanOrNull ?: false
-                        path to folder
-                    }.toSet()
-                    val added = items.map { it.first }
-                        .filter { (it.path to it.folder) !in seen }
-                        .map { json.encodeToJsonElement(NasThumbStore.Item.serializer(), it) }
-                    dav.put(indexPath, JsonArray(existing + added).toString().toByteArray(), "application/json")
-                    items.size
-                }
-                eventChannel.send(NasEvent.Message("썸네일 ${count}개 백업 완료"))
-            } catch (e: Exception) {
-                logcat(LogPriority.ERROR, e) { "NAS backup failed" }
-                eventChannel.send(NasEvent.Message("백업 실패: ${e.message}"))
-            } finally {
-                _state.update { it.copy(busy = false) }
-            }
+    private var selectionItems: List<NasThumbStore.Item> = emptyList()
+    private var restoreNoMeta: Set<String> = emptySet()
+    private var job: Job? = null
+
+    /** Step 1 of backup: folder check list from the thumbnails on the phone. */
+    fun startBackup() {
+        if (settings.backupPath.isEmpty()) return
+        val items = thumbs.all().map { it.first }
+        selectionItems = items
+        _state.update {
+            it.copy(selection = NasSelection(false, nasFolderTree(items.map(::nasItemDir).toSet()), items.map(::nasItemDir)))
         }
     }
 
-    fun restore() {
+    /** Step 1 of restore: folder check list from the index.json in the backup folder. */
+    fun startRestore() {
         val base = settings.backupPath
         if (base.isEmpty()) return
         _state.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val (count, metaCount) = withContext(Dispatchers.IO) {
+                val items = withContext(Dispatchers.IO) {
                     val index = dav.get(childPath(base, "index.json")) ?: error("백업이 없어요")
-                    val items = json.decodeFromString(itemsSerializer, index.decodeToString())
                     // Archives the PC tool found without ComicInfo.xml (no need to ask the NAS for them)
-                    val noMeta = runCatching {
+                    restoreNoMeta = runCatching {
                         dav.get(childPath(base, "pc_scan_cache.json"))?.let { bytes ->
                             (json.parseToJsonElement(bytes.decodeToString()) as JsonObject)["no_meta"]
                                 .let { it as JsonArray }
@@ -475,20 +475,130 @@ class NasBrowserViewModel(
                                 .toSet()
                         }
                     }.getOrNull().orEmpty()
-                    val n = AtomicInteger()
-                    val m = AtomicInteger()
+                    json.decodeFromString(itemsSerializer, index.decodeToString())
+                }
+                selectionItems = items
+                val dirs = items.map(::nasItemDir)
+                _state.update { it.copy(selection = NasSelection(true, nasFolderTree(dirs.toSet()), dirs)) }
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("복원 실패: ${e.message}"))
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    fun dismissSelection() = _state.update { it.copy(selection = null) }
+
+    fun cancelJob() {
+        job?.cancel()
+    }
+
+    /** Step 2: back up or restore only the items under the checked folders. */
+    fun confirmSelection(checked: Set<String>) {
+        val selection = _state.value.selection ?: return
+        val items = selectionItems.filterIndexed { i, _ -> nasIsSelected(selection.itemDirs[i], checked) }
+        _state.update { it.copy(selection = null) }
+        job = if (selection.restore) runRestore(items) else runBackup(items)
+    }
+
+    private fun setProgress(label: String, done: Int, total: Int) {
+        _state.update { it.copy(progress = NasProgress(label, done, total)) }
+    }
+
+    private fun runBackup(items: List<NasThumbStore.Item>): Job {
+        val base = settings.backupPath
+        setProgress("백업 중", 0, items.size)
+        return viewModelScope.launch {
+            val created = mutableSetOf<String>()
+            val done = java.util.Collections.synchronizedList(mutableListOf<NasThumbStore.Item>())
+            val counter = AtomicInteger()
+            var failed: Exception? = null
+            try {
+                withContext(Dispatchers.IO) {
+                    val limit = Semaphore(4)
+                    coroutineScope {
+                        items.forEach { item ->
+                            launch {
+                                limit.withPermit {
+                                    val file = thumbs.file(item.path, item.folder)
+                                    if (file.exists()) {
+                                        val target = backupFile(item)
+                                        synchronized(created) { dav.mkdirs(parentPath(target), created) }
+                                        dav.put(target, file.readBytes(), "image/jpeg")
+                                        done += item
+                                    }
+                                    setProgress("백업 중", counter.incrementAndGet(), items.size)
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) failed = e
+            } finally {
+                // Write the index for whatever was uploaded, also after cancel
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { if (done.isNotEmpty()) writeMergedIndex(base, done.toList(), created) }
+                        .onFailure { if (failed == null) failed = it as? Exception }
+                }
+                _state.update { it.copy(progress = null) }
+                val msg = when {
+                    failed != null -> "백업 실패: ${failed?.message} (${done.size}개 완료)"
+                    counter.get() < items.size -> "백업 취소 (${done.size}개 완료)"
+                    else -> "썸네일 ${done.size}개 백업 완료"
+                }
+                withContext(NonCancellable) { eventChannel.send(NasEvent.Message(msg)) }
+            }
+        }
+    }
+
+    /** Merges [items] into the index.json already on the NAS (PC tool results, other phones). */
+    private fun writeMergedIndex(base: String, items: List<NasThumbStore.Item>, created: MutableSet<String>) {
+        dav.mkdirs(base, created)
+        val indexPath = childPath(base, "index.json")
+        val existing = dav.get(indexPath)?.let {
+            runCatching { json.parseToJsonElement(it.decodeToString()) as? JsonArray }.getOrNull()
+        } ?: JsonArray(emptyList())
+        val seen = existing.mapNotNull { element ->
+            val obj = element as? JsonObject ?: return@mapNotNull null
+            val path = (obj["path"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+            val folder = (obj["folder"] as? JsonPrimitive)?.booleanOrNull ?: false
+            path to folder
+        }.toSet()
+        val added = items.distinct()
+            .filter { (it.path to it.folder) !in seen }
+            .map { json.encodeToJsonElement(NasThumbStore.Item.serializer(), it) }
+        dav.put(indexPath, JsonArray(existing + added).toString().toByteArray(), "application/json")
+    }
+
+    private fun runRestore(items: List<NasThumbStore.Item>): Job {
+        val base = settings.backupPath
+        val missingOnly = settings.restoreMissingOnly
+        val noMeta = restoreNoMeta
+        setProgress("복원 중", 0, items.size)
+        return viewModelScope.launch {
+            val n = AtomicInteger()
+            val m = AtomicInteger()
+            val counter = AtomicInteger()
+            var failed: Exception? = null
+            try {
+                withContext(Dispatchers.IO) {
                     val limit = Semaphore(6)
                     coroutineScope {
                         items.forEach { item ->
                             launch {
                                 limit.withPermit {
-                                    runCatching {
-                                        dav.get(backupFile(item))?.let {
-                                            thumbs.put(item.path, item.folder, it, alreadyThumbnail = true, save = false)
-                                            n.incrementAndGet()
+                                    if (!(missingOnly && thumbs.has(item.path, item.folder))) {
+                                        runCatching {
+                                            dav.get(backupFile(item))?.let {
+                                                thumbs.put(item.path, item.folder, it, alreadyThumbnail = true, save = false)
+                                                n.incrementAndGet()
+                                            }
                                         }
                                     }
-                                    if (!item.folder && '#' !in item.path && item.path !in noMeta) {
+                                    val wantsMeta = !item.folder && '#' !in item.path && item.path !in noMeta
+                                    if (wantsMeta && !(missingOnly && NasRuntime.meta.has(item.path))) {
                                         runCatching {
                                             dav.get(base + item.path + ".ComicInfo.xml")?.let {
                                                 NasRuntime.meta.put(item.path, it, notify = false)
@@ -496,23 +606,27 @@ class NasBrowserViewModel(
                                             }
                                         }
                                     }
+                                    setProgress("복원 중", counter.incrementAndGet(), items.size)
                                 }
                             }
                         }
                     }
+                }
+            } catch (e: Exception) {
+                if (e !is kotlinx.coroutines.CancellationException) failed = e
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
                     thumbs.flush()
                     NasRuntime.meta.notifyChanged()
-                    n.get() to m.get()
                 }
-                eventChannel.send(
-                    NasEvent.Message(
-                        if (metaCount > 0) "썸네일 ${count}개, 작품 정보 ${metaCount}개 복원 완료" else "썸네일 ${count}개 복원 완료",
-                    ),
-                )
-            } catch (e: Exception) {
-                eventChannel.send(NasEvent.Message("복원 실패: ${e.message}"))
-            } finally {
-                _state.update { it.copy(busy = false) }
+                _state.update { it.copy(progress = null) }
+                val result = "썸네일 ${n.get()}개" + if (m.get() > 0) ", 작품 정보 ${m.get()}개" else ""
+                val msg = when {
+                    failed != null -> "복원 실패: ${failed?.message} ($result)"
+                    counter.get() < items.size -> "복원 취소 ($result 받음)"
+                    else -> "$result 복원 완료"
+                }
+                withContext(NonCancellable) { eventChannel.send(NasEvent.Message(msg)) }
             }
         }
     }
@@ -730,13 +844,7 @@ private fun NasTile(
             .clip(MaterialTheme.shapes.small)
             .combinedClickable(
                 onClick = onClick,
-                onLongClick = {
-                    when {
-                        !entry.isDirectory -> menu = true
-                        // Library entry only for folders that have a thumbnail (zip check happens next)
-                        thumb != null -> onFolderLongPress()
-                    }
-                },
+                onLongClick = { menu = true },
             )
     ) {
         Box(
@@ -767,13 +875,39 @@ private fun NasTile(
                 )
             }
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-                DropdownMenuItem(
-                    text = { Text("폴더 썸네일로 지정") },
-                    onClick = {
-                        menu = false
-                        onSetFolderThumb()
-                    },
-                )
+                if (entry.isDirectory) {
+                    val favorite = remember(menu) { NasFavorites.contains(entry.path) }
+                    DropdownMenuItem(
+                        text = { Text(if (favorite) "즐겨찾기에서 제거" else "즐겨찾기에 추가") },
+                        onClick = {
+                            menu = false
+                            val added = NasFavorites.toggle(entry.path)
+                            Toast.makeText(
+                                context,
+                                if (added) "즐겨찾기에 추가했어요" else "즐겨찾기에서 제거했어요",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                        },
+                    )
+                    // Library entry only for folders that have a thumbnail (zip check happens next)
+                    if (thumb != null) {
+                        DropdownMenuItem(
+                            text = { Text("서재에 추가/제거") },
+                            onClick = {
+                                menu = false
+                                onFolderLongPress()
+                            },
+                        )
+                    }
+                } else {
+                    DropdownMenuItem(
+                        text = { Text("폴더 썸네일로 지정") },
+                        onClick = {
+                            menu = false
+                            onSetFolderThumb()
+                        },
+                    )
+                }
             }
         }
         // Name rules only apply to tiles with a thumbnail; icon tiles always show the full name.
@@ -819,6 +953,9 @@ private fun NasSettingsDialog(
     var thumbName by remember { mutableStateOf(settings.thumbName) }
     var backup by remember { mutableStateOf(settings.backupPath) }
     var thumbSize by remember { mutableStateOf(settings.thumbSize) }
+    var missingOnly by remember { mutableStateOf(settings.restoreMissingOnly) }
+    var tab by remember { mutableStateOf(0) }
+    var picking by remember { mutableStateOf(false) }
 
     fun connectionChanged() = server.trim().trimEnd('/') != settings.serverUrl ||
         user != settings.username ||
@@ -833,86 +970,129 @@ private fun NasSettingsDialog(
         settings.rootPath = root
         settings.thumbName = thumbName
         settings.backupPath = backup
+        settings.restoreMissingOnly = missingOnly
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("NAS 설정") },
         text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                OutlinedTextField(
-                    value = server,
-                    onValueChange = { server = it },
-                    label = { Text("WebDAV 주소") },
-                    placeholder = { Text("https://주소:5006") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                )
-                OutlinedTextField(user, { user = it }, label = { Text("아이디") }, singleLine = true)
-                OutlinedTextField(
-                    value = password,
-                    onValueChange = { password = it },
-                    label = { Text("비밀번호") },
-                    singleLine = true,
-                    visualTransformation = PasswordVisualTransformation(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                )
-                OutlinedTextField(
-                    value = root,
-                    onValueChange = { root = it },
-                    label = { Text("시작 폴더") },
-                    placeholder = { Text("/pComic/comic") },
-                    singleLine = true,
-                )
-                OutlinedTextField(
-                    value = thumbName,
-                    onValueChange = { thumbName = it },
-                    label = { Text("썸네일 파일명") },
-                    placeholder = { Text(NasSettings.DEFAULT_THUMB_NAME) },
-                    singleLine = true,
-                )
-                Text("썸네일 해상도 (새로 만드는 썸네일부터 적용)", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf(480, 700, 1000).forEach { size ->
-                        val selected = thumbSize == size
-                        OutlinedButton(
-                            onClick = { thumbSize = size },
-                            border = if (selected) {
-                                androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
-                            } else {
-                                null
-                            },
-                        ) { Text("${size}px") }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PrimaryTabRow(
+                    selectedTabIndex = tab,
+                    containerColor = androidx.compose.ui.graphics.Color.Transparent,
+                ) {
+                    listOf("연결", "썸네일 백업").forEachIndexed { i, title ->
+                        androidx.compose.material3.Tab(
+                            selected = tab == i,
+                            onClick = { tab = i },
+                            text = { Text(title) },
+                        )
                     }
                 }
-                HorizontalDivider()
-                OutlinedTextField(
-                    value = backup,
-                    onValueChange = { backup = it },
-                    label = { Text("썸네일 백업 폴더") },
-                    placeholder = { Text("/pComic/_thumbs") },
-                    singleLine = true,
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(
-                        enabled = !busy && backup.isNotBlank(),
-                        onClick = {
-                            save()
-                            onBackup()
-                        },
-                    ) { Text("백업하기") }
-                    OutlinedButton(
-                        enabled = !busy && backup.isNotBlank(),
-                        onClick = {
-                            save()
-                            onRestore()
-                        },
-                    ) { Text("복원하기") }
+                Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (tab == 0) {
+                        OutlinedTextField(
+                            value = server,
+                            onValueChange = { server = it },
+                            label = { Text("WebDAV 주소") },
+                            placeholder = { Text("https://주소:5006") },
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                        )
+                        OutlinedTextField(user, { user = it }, label = { Text("아이디") }, singleLine = true)
+                        OutlinedTextField(
+                            value = password,
+                            onValueChange = { password = it },
+                            label = { Text("비밀번호") },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        )
+                        OutlinedTextField(
+                            value = root,
+                            onValueChange = { root = it },
+                            label = { Text("시작 폴더") },
+                            placeholder = { Text("/pComic/comic") },
+                            singleLine = true,
+                        )
+                        OutlinedTextField(
+                            value = thumbName,
+                            onValueChange = { thumbName = it },
+                            label = { Text("썸네일 파일명") },
+                            placeholder = { Text(NasSettings.DEFAULT_THUMB_NAME) },
+                            singleLine = true,
+                        )
+                        Text("썸네일 해상도 (새로 만드는 썸네일부터 적용)", style = MaterialTheme.typography.labelLarge)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            listOf(480, 700, 1000).forEach { size ->
+                                val selected = thumbSize == size
+                                OutlinedButton(
+                                    onClick = { thumbSize = size },
+                                    border = if (selected) {
+                                        androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+                                    } else {
+                                        null
+                                    },
+                                ) { Text("${size}px") }
+                            }
+                        }
+                    } else {
+                        Text("썸네일 백업 폴더", style = MaterialTheme.typography.labelLarge)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = backup.ifBlank { "지정 안 됨" },
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedButton(
+                                enabled = server.isNotBlank(),
+                                onClick = {
+                                    save()
+                                    picking = true
+                                },
+                            ) { Text("폴더 선택") }
+                        }
+                        HorizontalDivider()
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { missingOnly = !missingOnly },
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Checkbox(checked = missingOnly, onCheckedChange = null, modifier = Modifier.padding(8.dp))
+                            Column {
+                                Text("썸네일 없는 것만")
+                                Text(
+                                    "복원할 때 폰에 이미 있는 썸네일·정보는 건너뛰어요",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                enabled = !busy && backup.isNotBlank(),
+                                onClick = {
+                                    save()
+                                    onBackup()
+                                },
+                            ) { Text("백업하기") }
+                            OutlinedButton(
+                                enabled = !busy && backup.isNotBlank(),
+                                onClick = {
+                                    save()
+                                    onRestore()
+                                },
+                            ) { Text("복원하기") }
+                        }
+                        if (busy) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    }
                 }
-                if (busy) CircularProgressIndicator(modifier = Modifier.size(24.dp))
             }
         },
         confirmButton = {
@@ -926,6 +1106,18 @@ private fun NasSettingsDialog(
             TextButton(onClick = onDismiss) { Text("닫기") }
         },
     )
+
+    if (picking) {
+        NasFolderPickerDialog(
+            start = backup.ifBlank { root },
+            onPick = {
+                backup = it
+                settings.backupPath = it
+                picking = false
+            },
+            onDismiss = { picking = false },
+        )
+    }
 }
 
 /** Real ratio (w/h) of a local thumbnail, or null when there is none yet. */

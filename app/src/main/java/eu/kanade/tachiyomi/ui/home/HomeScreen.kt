@@ -66,10 +66,10 @@ object HomeScreen : Screen() {
 
     private val TABS = listOf(
         mihon.feature.nas.NasTab,
+        // Custom: favorites tab; updates and browse moved into "More"
+        mihon.feature.nas.FavoritesTab,
         LibraryTab,
-        UpdatesTab,
         HistoryTab,
-        BrowseTab,
         MoreTab,
     )
 

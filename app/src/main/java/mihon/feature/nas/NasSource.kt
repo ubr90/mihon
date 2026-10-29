@@ -34,6 +34,9 @@ object NasRuntime {
     val meta by lazy { NasMetaStore(app) }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Folder stack the NAS tab should jump to (set by the favorites tab). */
+    val pendingJump = kotlinx.coroutines.flow.MutableStateFlow<List<String>?>(null)
+
     /**
      * Saves an archive thumbnail (if it has none yet) and uses it for the folder when the folder has none.
      */
