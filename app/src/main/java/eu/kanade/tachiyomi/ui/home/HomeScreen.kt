@@ -17,6 +17,7 @@ import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -145,7 +146,11 @@ object HomeScreen : Screen() {
 
             val goToLibraryTab = { tabNavigator.current = LibraryTab }
 
-            BackHandler(enabled = tabNavigator.current != LibraryTab, onBack = goToLibraryTab)
+            // Custom: inside a NAS sub folder, "back" belongs to the NAS tab (goes up one folder), whatever
+            // order the back handlers were registered in (it changes after returning from the reader)
+            val nasDepth by mihon.feature.nas.NasRuntime.stackDepth.collectAsState()
+            val nasHandlesBack = tabNavigator.current is mihon.feature.nas.NasTab && nasDepth > 1
+            BackHandler(enabled = tabNavigator.current != LibraryTab && !nasHandlesBack, onBack = goToLibraryTab)
 
             LaunchedEffect(Unit) {
                 launch {

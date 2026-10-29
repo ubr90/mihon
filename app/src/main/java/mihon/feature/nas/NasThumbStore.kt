@@ -32,16 +32,78 @@ class NasThumbStore(context: Context) {
         json.decodeFromString(indexSerializer, indexFile.readText()).toMutableMap()
     }.getOrDefault(mutableMapOf())
 
+    /**
+     * Folders that hold archives, as paths with the "[memo]" part of their own name removed.
+     * Only these folders are matched without the memo, so "강철 [E북]" and "강철 [E-book]" are the same.
+     */
+    private val leaves: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+
+    init {
+        index.values.forEach { learnFrom(it) }
+        migrateKeys()
+    }
+
+    private fun learnFrom(item: Item) {
+        if (!item.folder) leaves += stripLast(parentPath(item.path.substringBefore('#')))
+    }
+
+    /** Remembers folders that contain archives (from a listing or a backup index). */
+    fun markLeaf(folderPath: String) {
+        leaves += stripLast(folderPath)
+    }
+
+    fun learnLeaves(items: List<Item>) = items.forEach { learnFrom(it) }
+
+    /** Path used for matching: the memo of the archive's folder (or of a folder holding archives) is ignored. */
+    fun canon(path: String, folder: Boolean): String = when {
+        '#' in path -> canonZipPath(path.substringBefore('#')) + "#" + path.substringAfter('#')
+        !folder -> canonZipPath(path)
+        else -> stripLast(path).takeIf { it in leaves } ?: path
+    }
+
+    /** Old files were named from the exact path; rename them to the memo-free key once. */
+    @Synchronized
+    private fun migrateKeys() {
+        var changed = false
+        index.entries.toList().forEach { (k, item) ->
+            val nk = rawKey(canon(item.path, item.folder), item.folder)
+            if (nk != k) {
+                val from = File(dir, "$k.jpg")
+                val to = File(dir, "$nk.jpg")
+                if (from.exists()) {
+                    if (to.exists()) from.delete() else from.renameTo(to)
+                }
+                index.remove(k)
+                index[nk] = item
+                changed = true
+            }
+        }
+        if (changed) saveIndex()
+    }
+
+    /** Archive paths known to the phone (for moving metadata files to the new names). */
+    fun archivePaths(): List<String> = synchronized(this) {
+        index.values.filter { !it.folder && '#' !in it.path }.map { it.path }
+    }
+
     /** Bumped on every change so the UI reloads tiles. */
     private val _version = MutableStateFlow(0L)
     val version: StateFlow<Long> = _version.asStateFlow()
 
-    private fun key(path: String, folder: Boolean): String {
+    private fun rawKey(path: String, folder: Boolean): String {
         val digest = MessageDigest.getInstance("SHA-1").digest(((if (folder) "d:" else "f:") + path).toByteArray())
         return digest.joinToString("") { "%02x".format(it) }
     }
 
-    fun file(path: String, folder: Boolean): File = File(dir, key(path, folder) + ".jpg")
+    private fun key(path: String, folder: Boolean): String = rawKey(canon(path, folder), folder)
+
+    /** The stored file: memo-free name first, then the exact name (folder not known to hold archives yet). */
+    fun file(path: String, folder: Boolean): File {
+        val main = File(dir, key(path, folder) + ".jpg")
+        if (main.exists()) return main
+        val exact = File(dir, rawKey(path, folder) + ".jpg")
+        return if (exact.exists()) exact else main
+    }
 
     fun get(path: String, folder: Boolean): File? = file(path, folder).takeIf { it.exists() }
 
@@ -56,9 +118,16 @@ class NasThumbStore(context: Context) {
         save: Boolean = true,
     ) {
         val data = if (alreadyThumbnail) imageBytes else downscale(imageBytes) ?: error("이미지를 읽을 수 없음")
+        val item = Item(path, folder)
+        learnFrom(item)
         val k = key(path, folder)
+        // Drop a copy saved under the exact name before the folder was known to hold archives
+        rawKey(path, folder).takeIf { it != k }?.let { old ->
+            File(dir, "$old.jpg").delete()
+            index.remove(old)
+        }
         File(dir, "$k.jpg").writeBytes(data)
-        index[k] = Item(path, folder)
+        index[k] = item
         if (save) {
             saveIndex()
             _version.value++
@@ -70,9 +139,10 @@ class NasThumbStore(context: Context) {
     fun removeAll(items: List<Item>): Int {
         var n = 0
         items.forEach { item ->
-            val k = key(item.path, item.folder)
-            if (File(dir, "$k.jpg").delete()) n++
-            index.remove(k)
+            listOf(key(item.path, item.folder), rawKey(item.path, item.folder)).distinct().forEach { k ->
+                if (File(dir, "$k.jpg").delete()) n++
+                index.remove(k)
+            }
         }
         saveIndex()
         _version.value++
@@ -98,6 +168,19 @@ class NasThumbStore(context: Context) {
     }
 
     companion object {
+        private val memoRegex = Regex("""\s*\[[^\]]*\]\s*""")
+
+        /** "강철 [E북]" → "강철". A name that is only a memo ("[ㄱ]") stays as it is. */
+        fun stripMemo(name: String): String =
+            name.replace(memoRegex, " ").trim().replace(Regex("""\s+"""), " ").ifEmpty { name }
+
+        /** Removes the memo from the last folder of [path]. */
+        fun stripLast(path: String): String =
+            if (path == "/" || path.isEmpty()) path else childPath(parentPath(path), stripMemo(fileName(path)))
+
+        /** Archive path with the memo of its folder removed (the archive's own name is kept). */
+        fun canonZipPath(zipPath: String): String = childPath(stripLast(parentPath(zipPath)), fileName(zipPath))
+
         fun downscale(bytes: ByteArray): ByteArray? {
             val maxSide = NasRuntime.settings.thumbSize.coerceIn(200, 2000)
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

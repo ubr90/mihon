@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -81,11 +82,31 @@ object CoverGridSettings {
     }
 
     /** Grid settings for a NAS folder: its own when locked, otherwise the shared NAS settings. */
+    /** Locked folders are kept by their path without the "[memo]" (folders holding archives). */
+    private fun lockKey(path: String) = mihon.feature.nas.NasRuntime.thumbs.canon(path, folder = true)
+
+    /** Saved key of the lock that covers [path] (older locks were saved by the exact path). */
+    fun nasLockKey(path: String?): String? {
+        path ?: return null
+        val key = lockKey(path)
+        return lockedDirs.value.firstOrNull { it == key || it == path || lockKey(it) == key }
+    }
+
     fun nasProfileFor(path: String?): CoverGridProfile =
-        if (path != null && path in lockedDirs.value) folderProfile(path) else nas
+        nasLockKey(path)?.let { folderProfile(it) } ?: nas
 
     fun setNasFolderLocked(path: String, locked: Boolean) {
-        val profile = folderProfile(path)
+        val existing = nasLockKey(path)
+        if (!locked && existing != null) {
+            folderProfile(existing).clear()
+            synchronized(this) { folderProfiles.remove(existing) }
+            lockedDirs.value = lockedDirs.value - existing
+            prefs.edit { putStringSet("nas_locked_dirs", lockedDirs.value) }
+            return
+        }
+        if (locked && existing != null) return
+        val keyPath = lockKey(path)
+        val profile = folderProfile(keyPath)
         if (locked) {
             // Start from the current shared settings
             profile.setAspectMode(nas.aspectMode.value)
@@ -93,7 +114,7 @@ object CoverGridSettings {
             profile.setNameMode(nas.nameMode.value)
             profile.setRowHeight(nas.rowHeight.value)
             profile.setColumns(nas.columns.value)
-            lockedDirs.value = lockedDirs.value + path
+            lockedDirs.value = lockedDirs.value + keyPath
         } else {
             profile.clear()
             synchronized(this) { folderProfiles.remove(path) }
@@ -332,7 +353,7 @@ fun CoverGridOptionsDialog(profile: CoverGridProfile, onDismiss: () -> Unit, loc
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 if (lockPath != null) {
-                    val locked = lockPath in lockedDirs
+                    val locked = remember(lockedDirs, lockPath) { CoverGridSettings.nasLockKey(lockPath) != null }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()

@@ -144,10 +144,15 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
         }
 
         BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
+        if (inTab) {
+            LaunchedEffect(state.stack.size) { NasRuntime.stackDepth.value = state.stack.size }
+        }
 
         // Grid settings: the folder's own when "only this folder" is locked, otherwise the shared NAS ones
         val lockedDirs by CoverGridSettings.nasLocked.collectAsState()
-        val gridProfile = remember(state.currentPath, lockedDirs) { CoverGridSettings.nasProfileFor(state.currentPath) }
+        val gridProfile = remember(state.currentPath, state.entries, lockedDirs) {
+            CoverGridSettings.nasProfileFor(state.currentPath)
+        }
         val nameMode by gridProfile.nameMode.collectAsState()
         var gridOptions by remember { mutableStateOf(false) }
         if (gridOptions) {
@@ -286,7 +291,7 @@ class NasBrowserViewModel(
             NasRuntime.pendingJump.collect { stack ->
                 if (stack != null && settings.isConfigured) {
                     NasRuntime.pendingJump.value = null
-                    setStack(stack)
+                    setStack(resolveRenamed(stack))
                     _state.update { it.copy(entries = emptyList()) }
                     reload()
                 }
@@ -305,6 +310,27 @@ class NasBrowserViewModel(
                     resetToRoot()
                 }
             }
+        }
+    }
+
+    /**
+     * A favorite may point to a folder whose "[memo]" was edited since: find the folder with the
+     * same name without the memo and use (and remember) its current name.
+     */
+    private suspend fun resolveRenamed(stack: List<String>): List<String> {
+        val target = stack.lastOrNull() ?: return stack
+        if (stack.size < 2) return stack
+        return withContext(Dispatchers.IO) {
+            runCatching {
+                val parent = parentPath(target)
+                val dirs = dav.list(parent).filter { it.isDirectory }
+                if (dirs.any { NasSettings.normalizePath(it.path) == target }) return@runCatching stack
+                val wanted = NasThumbStore.stripMemo(fileName(target))
+                val found = dirs.firstOrNull { NasThumbStore.stripMemo(it.name) == wanted } ?: return@runCatching stack
+                val newPath = NasSettings.normalizePath(found.path)
+                NasFavorites.rename(target, newPath)
+                stack.dropLast(1) + newPath
+            }.getOrDefault(stack)
         }
     }
 
@@ -340,6 +366,8 @@ class NasBrowserViewModel(
                     .filter { it.isDirectory || isArchiveName(it.name) }
                     .sortedWith(compareBy<NasEntry> { !it.isDirectory }.thenBy(NaturalOrder) { it.name })
                 if (_state.value.currentPath != path) return@launch
+                // A folder holding archives is matched without its "[memo]"
+                if (visible.any { !it.isDirectory }) thumbs.markLeaf(path)
                 _state.update { it.copy(entries = visible, loading = false) }
 
                 // Thumbnail image inside the current folder counts for this folder
@@ -624,9 +652,9 @@ class NasBrowserViewModel(
                 val seen = withContext(Dispatchers.IO) {
                     dav.get(childPath(base, "index.json"))?.let { bytes ->
                         runCatching { json.decodeFromString(itemsSerializer, bytes.decodeToString()) }.getOrNull()
-                    }.orEmpty().map { it.path to it.folder }.toSet()
+                    }.orEmpty().also { thumbs.learnLeaves(it) }.map { thumbs.canon(it.path, it.folder) to it.folder }.toSet()
                 }
-                val overwrite = items.count { (it.path to it.folder) in seen }
+                val overwrite = items.count { (thumbs.canon(it.path, it.folder) to it.folder) in seen }
                 val fresh = items.size - overwrite
                 _state.update {
                     it.copy(
@@ -715,22 +743,24 @@ class NasBrowserViewModel(
         val existing = dav.get(indexPath)?.let {
             runCatching { json.parseToJsonElement(it.decodeToString()) as? JsonArray }.getOrNull()
         } ?: JsonArray(emptyList())
-        val seen = existing.mapNotNull { element ->
-            val obj = element as? JsonObject ?: return@mapNotNull null
-            val path = (obj["path"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+        // Same item = same path after removing the "[memo]" of its folder: the uploaded (current) name wins
+        val uploaded = items.distinct()
+        val uploadedKeys = uploaded.map { thumbs.canon(it.path, it.folder) to it.folder }.toSet()
+        val kept = existing.filter { element ->
+            val obj = element as? JsonObject ?: return@filter true
+            val path = (obj["path"] as? JsonPrimitive)?.contentOrNull ?: return@filter true
             val folder = (obj["folder"] as? JsonPrimitive)?.booleanOrNull ?: false
-            path to folder
-        }.toSet()
-        val added = items.distinct()
-            .filter { (it.path to it.folder) !in seen }
-            .map { json.encodeToJsonElement(NasThumbStore.Item.serializer(), it) }
-        dav.put(indexPath, JsonArray(existing + added).toString().toByteArray(), "application/json")
+            (thumbs.canon(path, folder) to folder) !in uploadedKeys
+        }
+        val added = uploaded.map { json.encodeToJsonElement(NasThumbStore.Item.serializer(), it) }
+        dav.put(indexPath, JsonArray(kept + added).toString().toByteArray(), "application/json")
     }
 
     private fun runRestore(items: List<NasThumbStore.Item>): Job {
         val base = settings.backupPath
         val missingOnly = settings.restoreMissingOnly
         val noMeta = restoreNoMeta
+        thumbs.learnLeaves(items)
         setProgress("복원 중", 0, items.size)
         return viewModelScope.launch {
             val n = AtomicInteger()

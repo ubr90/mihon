@@ -31,7 +31,10 @@ object NasRuntime {
     val settings by lazy { NasSettings(app) }
     val dav by lazy { NasWebDav(network.client, settings) }
     val thumbs by lazy { NasThumbStore(app) }
-    val meta by lazy { NasMetaStore(app) }
+    val meta by lazy { NasMetaStore(app).also { it.migrate(thumbs.archivePaths()) } }
+
+    /** Depth of the NAS tab's folder stack (the home screen leaves "back" to the NAS tab while > 1). */
+    val stackDepth = kotlinx.coroutines.flow.MutableStateFlow(0)
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Folder stack the NAS tab should jump to (set by the favorites tab). */

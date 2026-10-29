@@ -54,9 +54,23 @@ class NasMetaStore(context: Context) {
     private val _version = MutableStateFlow(0L)
     val version: StateFlow<Long> = _version.asStateFlow()
 
-    private fun file(zipPath: String): File {
-        val digest = MessageDigest.getInstance("SHA-1").digest("f:$zipPath".toByteArray())
+    private fun rawFile(path: String): File {
+        val digest = MessageDigest.getInstance("SHA-1").digest("f:$path".toByteArray())
         return File(dir, digest.joinToString("") { "%02x".format(it) } + ".xml")
+    }
+
+    /** Keyed by the archive path without its folder's "[memo]", like the thumbnails. */
+    private fun file(zipPath: String): File = rawFile(NasThumbStore.canonZipPath(zipPath))
+
+    /** Moves files saved under the exact archive path to the memo-free name (once). */
+    fun migrate(zipPaths: List<String>) {
+        zipPaths.forEach { path ->
+            val old = rawFile(path)
+            val new = file(path)
+            if (old != new && old.exists()) {
+                if (new.exists()) old.delete() else old.renameTo(new)
+            }
+        }
     }
 
     fun has(zipPath: String): Boolean = file(zipPath).exists()

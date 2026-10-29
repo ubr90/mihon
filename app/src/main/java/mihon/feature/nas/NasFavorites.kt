@@ -57,11 +57,21 @@ object NasFavorites {
     private val _paths = MutableStateFlow(NasRuntime.settings.favorites)
     val paths: StateFlow<List<String>> = _paths.asStateFlow()
 
-    fun contains(path: String) = path in _paths.value
+    /** Same folder even when its "[memo]" was edited. */
+    private fun same(a: String, b: String) =
+        a == b || NasRuntime.thumbs.canon(a, folder = true) == NasRuntime.thumbs.canon(b, folder = true)
+
+    fun contains(path: String) = _paths.value.any { same(it, path) }
+
+    fun rename(old: String, new: String) {
+        val list = _paths.value.map { if (it == old) new else it }
+        NasRuntime.settings.favorites = list
+        _paths.value = list
+    }
 
     fun toggle(path: String): Boolean {
-        val added = path !in _paths.value
-        val list = if (added) _paths.value + path else _paths.value - path
+        val added = !contains(path)
+        val list = if (added) _paths.value + path else _paths.value.filterNot { same(it, path) }
         NasRuntime.settings.favorites = list
         _paths.value = list
         return added
