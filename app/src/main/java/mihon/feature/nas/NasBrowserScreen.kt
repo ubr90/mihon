@@ -4,6 +4,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -69,6 +70,7 @@ import eu.kanade.presentation.util.Screen
 import eu.kanade.tachiyomi.ui.reader.ReaderActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -80,6 +82,11 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
 import logcat.LogPriority
 import mihon.domain.manga.model.toDomainManga
 import mihon.icons.materialsymbols.MaterialSymbols
@@ -102,6 +109,7 @@ import tachiyomi.core.common.util.system.logcat
 import tachiyomi.domain.chapter.interactor.GetChaptersByMangaId
 import tachiyomi.domain.manga.interactor.NetworkToLocalManga
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Custom: NAS (WebDAV) folder browser. Folders and zip/cbz archives are shown as tiles;
@@ -115,7 +123,10 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
         val context = LocalContext.current
         val viewModel = metroViewModel<NasBrowserViewModel>()
         val state by viewModel.state.collectAsState()
-        val thumbVersion by NasRuntime.thumbs.version.collectAsState()
+        val thumbOnlyVersion by NasRuntime.thumbs.version.collectAsState()
+        val metaVersion by NasRuntime.meta.version.collectAsState()
+        // Tiles reload when a thumbnail or metadata (ComicInfo) changes
+        val thumbVersion = thumbOnlyVersion + metaVersion
 
         LaunchedEffect(Unit) {
             viewModel.events.collect { event ->
@@ -207,6 +218,7 @@ class NasBrowserViewModel(
     private val getChaptersByMangaId: GetChaptersByMangaId,
     private val updateManga: eu.kanade.domain.manga.interactor.UpdateManga,
     private val coverCache: eu.kanade.tachiyomi.data.cache.CoverCache,
+    private val updateMangaFromRemote: mihon.domain.source.interactor.UpdateMangaFromRemote,
 ) : ViewModel() {
 
     private val settings get() = NasRuntime.settings
@@ -364,6 +376,8 @@ class NasBrowserViewModel(
                         thumbs.get(folder, folder = true)?.inputStream()?.use { coverCache.setCustomCoverToCache(manga, it) }
                         updateManga.awaitUpdateCoverLastModified(manga.id)
                         updateManga.awaitUpdateFavorite(manga.id, true)
+                        // Author, summary and genres from ComicInfo.xml (if restored from the PC tool)
+                        updateMangaFromRemote(NasSource, manga, fetchDetails = true)
                     }
                 }
                 eventChannel.send(NasEvent.Message(if (prompt.inLibrary) "서재에서 제거했어요" else "서재에 추가했어요"))
@@ -416,11 +430,21 @@ class NasBrowserViewModel(
                         dav.put(target, file.readBytes(), "image/jpeg")
                     }
                     dav.mkdirs(base, created)
-                    dav.put(
-                        childPath(base, "index.json"),
-                        json.encodeToString(itemsSerializer, items.map { it.first }).toByteArray(),
-                        "application/json",
-                    )
+                    // Merge with the index already on the NAS (PC tool results, other phones) instead of replacing it
+                    val indexPath = childPath(base, "index.json")
+                    val existing = dav.get(indexPath)?.let {
+                        runCatching { json.parseToJsonElement(it.decodeToString()) as? JsonArray }.getOrNull()
+                    } ?: JsonArray(emptyList())
+                    val seen = existing.mapNotNull { element ->
+                        val obj = element as? JsonObject ?: return@mapNotNull null
+                        val path = (obj["path"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+                        val folder = (obj["folder"] as? JsonPrimitive)?.booleanOrNull ?: false
+                        path to folder
+                    }.toSet()
+                    val added = items.map { it.first }
+                        .filter { (it.path to it.folder) !in seen }
+                        .map { json.encodeToJsonElement(NasThumbStore.Item.serializer(), it) }
+                    dav.put(indexPath, JsonArray(existing + added).toString().toByteArray(), "application/json")
                     items.size
                 }
                 eventChannel.send(NasEvent.Message("썸네일 ${count}개 백업 완료"))
@@ -439,21 +463,52 @@ class NasBrowserViewModel(
         _state.update { it.copy(busy = true) }
         viewModelScope.launch {
             try {
-                val count = withContext(Dispatchers.IO) {
+                val (count, metaCount) = withContext(Dispatchers.IO) {
                     val index = dav.get(childPath(base, "index.json")) ?: error("백업이 없어요")
                     val items = json.decodeFromString(itemsSerializer, index.decodeToString())
-                    var n = 0
-                    items.forEach { item ->
-                        runCatching {
-                            dav.get(backupFile(item))?.let {
-                                thumbs.put(item.path, item.folder, it, alreadyThumbnail = true)
-                                n++
+                    // Archives the PC tool found without ComicInfo.xml (no need to ask the NAS for them)
+                    val noMeta = runCatching {
+                        dav.get(childPath(base, "pc_scan_cache.json"))?.let { bytes ->
+                            (json.parseToJsonElement(bytes.decodeToString()) as JsonObject)["no_meta"]
+                                .let { it as JsonArray }
+                                .mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+                                .toSet()
+                        }
+                    }.getOrNull().orEmpty()
+                    val n = AtomicInteger()
+                    val m = AtomicInteger()
+                    val limit = Semaphore(6)
+                    coroutineScope {
+                        items.forEach { item ->
+                            launch {
+                                limit.withPermit {
+                                    runCatching {
+                                        dav.get(backupFile(item))?.let {
+                                            thumbs.put(item.path, item.folder, it, alreadyThumbnail = true, save = false)
+                                            n.incrementAndGet()
+                                        }
+                                    }
+                                    if (!item.folder && '#' !in item.path && item.path !in noMeta) {
+                                        runCatching {
+                                            dav.get(base + item.path + ".ComicInfo.xml")?.let {
+                                                NasRuntime.meta.put(item.path, it, notify = false)
+                                                m.incrementAndGet()
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
-                    n
+                    thumbs.flush()
+                    NasRuntime.meta.notifyChanged()
+                    n.get() to m.get()
                 }
-                eventChannel.send(NasEvent.Message("썸네일 ${count}개 복원 완료"))
+                eventChannel.send(
+                    NasEvent.Message(
+                        if (metaCount > 0) "썸네일 ${count}개, 작품 정보 ${metaCount}개 복원 완료" else "썸네일 ${count}개 복원 완료",
+                    ),
+                )
             } catch (e: Exception) {
                 eventChannel.send(NasEvent.Message("복원 실패: ${e.message}"))
             } finally {
@@ -557,6 +612,9 @@ private fun NasBrowserContent(
                         state.entries.any { NasRuntime.thumbs.has(it.path, folder = it.isDirectory) }
                     }
                     val layoutMode = if (anyThumb) mode else CoverGridSettings.MODE_SQUARE
+                    val seriesInfo = remember(state.entries, thumbVersion) {
+                        NasRuntime.meta.seriesFor(state.entries.filter { !it.isDirectory }.map { it.path })
+                    }
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
@@ -571,6 +629,9 @@ private fun NasBrowserContent(
                             },
                         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
                     ) {
+                        if (seriesInfo != null) {
+                            item(key = "nas-series-info") { NasSeriesInfo(seriesInfo) }
+                        }
                         coverGridItems(
                             items = state.entries,
                             key = { it.path },
@@ -597,6 +658,51 @@ private fun NasBrowserContent(
                     }
                 }
             }
+        }
+    }
+}
+
+/** Komga-like series header from the first archive's ComicInfo.xml. */
+@Composable
+private fun NasSeriesInfo(info: NasMetaStore.ComicInfo) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .clip(MaterialTheme.shapes.small)
+            .clickable { expanded = !expanded }
+            .padding(4.dp),
+    ) {
+        info.series?.let {
+            Text(text = it, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+        }
+        val line = listOfNotNull(info.authors, info.publisher, info.year).joinToString(" · ")
+        if (line.isNotEmpty()) {
+            Text(
+                text = line,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        val genres = info.genres
+        if (genres.isNotEmpty()) {
+            Text(
+                text = genres.joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                maxLines = if (expanded) Int.MAX_VALUE else 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        info.summary?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = if (expanded) Int.MAX_VALUE else 3,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(top = 4.dp),
+            )
         }
     }
 }
@@ -672,7 +778,13 @@ private fun NasTile(
         }
         // Name rules only apply to tiles with a thumbnail; icon tiles always show the full name.
         // "No brackets" applies to folders only (files keep tags like "[단]").
-        val baseName = if (entry.isDirectory) entry.name else entry.name.substringBeforeLast('.')
+        // Archives show the ComicInfo title (from the PC tool) when there is one
+        val baseName = if (entry.isDirectory) {
+            entry.name
+        } else {
+            remember(entry.path, thumbVersion) { NasRuntime.meta.get(entry.path)?.title }
+                ?: entry.name.substringBeforeLast('.')
+        }
         val shownName = when {
             thumb == null -> baseName
             nameMode == CoverGridSettings.NAME_HIDE -> null

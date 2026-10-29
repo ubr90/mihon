@@ -61,7 +61,7 @@ class NasSettings(context: Context) {
         private const val KEY_BACKUP = "backup"
         private const val KEY_THUMB_SIZE = "thumb_size"
         private const val KEY_LAST_STACK = "last_stack"
-        const val DEFAULT_THUMB_NAME = "_thumb.jpg"
+        const val DEFAULT_THUMB_NAME = "000_cover.jpeg"
 
         fun normalizePath(path: String): String {
             val p = "/" + path.trim().trim('/')

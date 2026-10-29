@@ -31,6 +31,7 @@ object NasRuntime {
     val settings by lazy { NasSettings(app) }
     val dav by lazy { NasWebDav(network.client, settings) }
     val thumbs by lazy { NasThumbStore(app) }
+    val meta by lazy { NasMetaStore(app) }
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
@@ -84,17 +85,21 @@ object NasSource : HttpSource() {
 
     fun chaptersFor(folderPath: String): List<SChapter> {
         val thumbName = NasRuntime.settings.thumbName
-        return NasRuntime.dav.list(folderPath)
+        val archives = NasRuntime.dav.list(folderPath)
             .filter { !it.isDirectory && isArchiveName(it.name) && !it.name.equals(thumbName, true) }
             .sortedWith(compareBy(NaturalOrder) { it.name })
-            .mapIndexed { i, entry ->
-                SChapter.create().apply {
-                    url = entry.path
-                    name = entry.name.substringBeforeLast('.')
-                    chapter_number = (i + 1).toFloat()
-                    date_upload = entry.lastModified
-                }
+        val infos = archives.map { NasRuntime.meta.get(it.path) }
+        // ComicInfo numbers are used only when every archive has one (mixed numbering breaks the order)
+        val numbers = infos.map { it?.number?.toFloatOrNull() }
+        val useNumbers = numbers.isNotEmpty() && numbers.all { it != null } && numbers.distinct().size == numbers.size
+        return archives.mapIndexed { i, entry ->
+            SChapter.create().apply {
+                url = entry.path
+                name = infos[i]?.title ?: entry.name.substringBeforeLast('.')
+                chapter_number = if (useNumbers) numbers[i]!! else (i + 1).toFloat()
+                date_upload = entry.lastModified
             }
+        }
     }
 
     fun mangaFor(folderPath: String): SManga = SManga.create().apply {
@@ -103,7 +108,27 @@ object NasSource : HttpSource() {
         initialized = true
     }
 
-    override fun fetchMangaDetails(manga: SManga): Observable<SManga> = Observable.just(manga)
+    /** Fills series details from the ComicInfo.xml of the first archive (PC tool + restore). */
+    fun applyMeta(manga: SManga, info: NasMetaStore.ComicInfo?) {
+        if (info == null) return
+        manga.author = info.writer
+        manga.artist = info.penciller ?: info.writer
+        manga.description = listOfNotNull(info.summary, info.publisher?.let { "출판사: $it" })
+            .joinToString("\n\n")
+            .ifEmpty { null }
+        manga.genre = info.genres.joinToString(", ").ifEmpty { null }
+    }
+
+    override fun fetchMangaDetails(manga: SManga): Observable<SManga> = Observable.fromCallable {
+        val zips = runCatching { chaptersFor(manga.url).map { it.url } }.getOrDefault(emptyList())
+        SManga.create().apply {
+            url = manga.url
+            title = manga.title
+            thumbnail_url = null
+            initialized = true
+            applyMeta(this, NasRuntime.meta.seriesFor(zips))
+        }
+    }
 
     override fun fetchChapterList(manga: SManga): Observable<List<SChapter>> =
         Observable.fromCallable { chaptersFor(manga.url) }

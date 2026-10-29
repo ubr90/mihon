@@ -48,11 +48,26 @@ class NasThumbStore(context: Context) {
     fun has(path: String, folder: Boolean): Boolean = file(path, folder).exists()
 
     @Synchronized
-    fun put(path: String, folder: Boolean, imageBytes: ByteArray, alreadyThumbnail: Boolean = false) {
+    fun put(
+        path: String,
+        folder: Boolean,
+        imageBytes: ByteArray,
+        alreadyThumbnail: Boolean = false,
+        save: Boolean = true,
+    ) {
         val data = if (alreadyThumbnail) imageBytes else downscale(imageBytes) ?: error("이미지를 읽을 수 없음")
         val k = key(path, folder)
         File(dir, "$k.jpg").writeBytes(data)
         index[k] = Item(path, folder)
+        if (save) {
+            saveIndex()
+            _version.value++
+        }
+    }
+
+    /** Saves the index after puts made with save = false (bulk restore). */
+    @Synchronized
+    fun flush() {
         saveIndex()
         _version.value++
     }
