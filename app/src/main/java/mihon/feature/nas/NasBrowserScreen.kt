@@ -189,6 +189,7 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
                 },
                 onBackup = viewModel::startBackup,
                 onRestore = viewModel::startRestore,
+                onDelete = viewModel::startDelete,
             )
         }
 
@@ -197,6 +198,20 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
                 selection = selection,
                 onConfirm = viewModel::confirmSelection,
                 onDismiss = viewModel::dismissSelection,
+            )
+        }
+        state.confirm?.let { confirm ->
+            AlertDialog(
+                onDismissRequest = viewModel::dismissConfirm,
+                title = { Text(confirm.title) },
+                text = { Text(confirm.text) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        viewModel.dismissConfirm()
+                        confirm.onConfirm()
+                    }) { Text(confirm.confirmLabel) }
+                },
+                dismissButton = { TextButton(onClick = viewModel::dismissConfirm) { Text("취소") } },
             )
         }
         state.progress?.let { progress ->
@@ -221,6 +236,7 @@ data class NasState(
     val libraryPrompt: LibraryPrompt? = null,
     val busy: Boolean = false,
     val selection: NasSelection? = null,
+    val confirm: NasConfirm? = null,
     val progress: NasProgress? = null,
 ) {
     val currentPath: String? get() = stack.lastOrNull()
@@ -453,9 +469,32 @@ class NasBrowserViewModel(
         val items = thumbs.all().map { it.first }
         selectionItems = items
         _state.update {
-            it.copy(selection = NasSelection(false, nasFolderTree(items.map(::nasItemDir).toSet()), items.map(::nasItemDir)))
+            it.copy(
+                selection = NasSelection(
+                    NasSelection.Mode.BACKUP,
+                    nasFolderTree(items.map(::nasItemDir).toSet()),
+                    items.map(::nasItemDir),
+                ),
+            )
         }
     }
+
+    /** Folder check list of the thumbnails on the phone, for deleting them from the phone only. */
+    fun startDelete() {
+        val items = thumbs.all().map { it.first }
+        selectionItems = items
+        _state.update {
+            it.copy(
+                selection = NasSelection(
+                    NasSelection.Mode.DELETE,
+                    nasFolderTree(items.map(::nasItemDir).toSet()),
+                    items.map(::nasItemDir),
+                ),
+            )
+        }
+    }
+
+    fun dismissConfirm() = _state.update { it.copy(confirm = null) }
 
     /** Step 1 of restore: folder check list from the index.json in the backup folder. */
     fun startRestore() {
@@ -479,7 +518,9 @@ class NasBrowserViewModel(
                 }
                 selectionItems = items
                 val dirs = items.map(::nasItemDir)
-                _state.update { it.copy(selection = NasSelection(true, nasFolderTree(dirs.toSet()), dirs)) }
+                _state.update {
+                    it.copy(selection = NasSelection(NasSelection.Mode.RESTORE, nasFolderTree(dirs.toSet()), dirs))
+                }
             } catch (e: Exception) {
                 eventChannel.send(NasEvent.Message("복원 실패: ${e.message}"))
             } finally {
@@ -499,7 +540,62 @@ class NasBrowserViewModel(
         val selection = _state.value.selection ?: return
         val items = selectionItems.filterIndexed { i, _ -> nasIsSelected(selection.itemDirs[i], checked) }
         _state.update { it.copy(selection = null) }
-        job = if (selection.restore) runRestore(items) else runBackup(items)
+        when (selection.mode) {
+            NasSelection.Mode.RESTORE -> job = runRestore(items)
+            NasSelection.Mode.BACKUP -> confirmBackup(items)
+            NasSelection.Mode.DELETE -> _state.update {
+                it.copy(
+                    confirm = NasConfirm(
+                        title = "폰에서 삭제",
+                        text = "썸네일 %,d개를 폰에서 지울까요?\nNAS 백업은 그대로 남아요.".format(items.size),
+                        confirmLabel = "삭제",
+                        onConfirm = { deleteFromPhone(items) },
+                    ),
+                )
+            }
+        }
+    }
+
+    /** Safety check: tells how many NAS thumbnails will be overwritten before the backup starts. */
+    private fun confirmBackup(items: List<NasThumbStore.Item>) {
+        val base = settings.backupPath
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                val seen = withContext(Dispatchers.IO) {
+                    dav.get(childPath(base, "index.json"))?.let { bytes ->
+                        runCatching { json.decodeFromString(itemsSerializer, bytes.decodeToString()) }.getOrNull()
+                    }.orEmpty().map { it.path to it.folder }.toSet()
+                }
+                val overwrite = items.count { (it.path to it.folder) in seen }
+                val fresh = items.size - overwrite
+                _state.update {
+                    it.copy(
+                        confirm = NasConfirm(
+                            title = "백업",
+                            text = "새로 올림 %,d개\n덮어씀 %,d개 (NAS의 같은 썸네일을 폰 것으로 바꿔요)\n\n계속할까요?"
+                                .format(fresh, overwrite),
+                            confirmLabel = "백업",
+                            onConfirm = { job = runBackup(items) },
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("백업 실패: ${e.message}"))
+            } finally {
+                _state.update { it.copy(busy = false) }
+            }
+        }
+    }
+
+    private fun deleteFromPhone(items: List<NasThumbStore.Item>) {
+        viewModelScope.launch {
+            val n = withContext(Dispatchers.IO) {
+                items.filter { !it.folder && '#' !in it.path }.forEach { NasRuntime.meta.remove(it.path) }
+                thumbs.removeAll(items).also { NasRuntime.meta.notifyChanged() }
+            }
+            eventChannel.send(NasEvent.Message("폰에서 썸네일 ${n}개를 지웠어요"))
+        }
     }
 
     private fun setProgress(label: String, done: Int, total: Int) {
@@ -945,6 +1041,7 @@ private fun NasSettingsDialog(
     onSaved: (connectionChanged: Boolean) -> Unit,
     onBackup: () -> Unit,
     onRestore: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     var server by remember { mutableStateOf(settings.serverUrl) }
     var user by remember { mutableStateOf(settings.username) }
@@ -1090,6 +1187,15 @@ private fun NasSettingsDialog(
                                 },
                             ) { Text("복원하기") }
                         }
+                        OutlinedButton(
+                            enabled = !busy,
+                            onClick = onDelete,
+                        ) { Text("폰 썸네일 삭제하기") }
+                        Text(
+                            "폰에 저장된 썸네일만 지워요. NAS 백업은 지우지 않아요.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                         if (busy) CircularProgressIndicator(modifier = Modifier.size(24.dp))
                     }
                 }

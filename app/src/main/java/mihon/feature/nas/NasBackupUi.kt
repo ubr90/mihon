@@ -46,12 +46,17 @@ data class NasProgress(val label: String, val done: Int, val total: Int)
 
 /** Custom: folder check list shown before backup/restore. */
 data class NasSelection(
-    val restore: Boolean,
+    val mode: Mode,
     /** Folder -> sub folders (natural order). "/" is the top. */
     val tree: Map<String, List<String>>,
     /** Folder each item belongs to (same order as the items in the view model). */
     val itemDirs: List<String>,
-)
+) {
+    enum class Mode { BACKUP, RESTORE, DELETE }
+}
+
+/** Custom: yes/no question before a backup or delete runs. */
+data class NasConfirm(val title: String, val text: String, val confirmLabel: String, val onConfirm: () -> Unit)
 
 /** Folder an index item belongs to: folder itself, the archive's folder, or the archive's folder for TOC items. */
 fun nasItemDir(item: NasThumbStore.Item): String = when {
@@ -111,7 +116,15 @@ fun NasFolderSelectDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (selection.restore) "복원할 폴더" else "백업할 폴더") },
+        title = {
+            Text(
+                when (selection.mode) {
+                    NasSelection.Mode.BACKUP -> "백업할 폴더"
+                    NasSelection.Mode.RESTORE -> "복원할 폴더"
+                    NasSelection.Mode.DELETE -> "폰에서 지울 폴더"
+                },
+            )
+        },
         text = {
             Column {
                 Row(
@@ -176,7 +189,13 @@ fun NasFolderSelectDialog(
         },
         confirmButton = {
             TextButton(enabled = count > 0, onClick = { onConfirm(checked) }) {
-                Text(if (selection.restore) "복원 (${count}개)" else "백업 (${count}개)")
+                Text(
+                    when (selection.mode) {
+                        NasSelection.Mode.BACKUP -> "백업 (${count}개)"
+                        NasSelection.Mode.RESTORE -> "복원 (${count}개)"
+                        NasSelection.Mode.DELETE -> "삭제 (${count}개)"
+                    },
+                )
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("취소") } },

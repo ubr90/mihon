@@ -65,6 +65,20 @@ class NasThumbStore(context: Context) {
         }
     }
 
+    /** Removes thumbnails (bulk); returns how many were removed. */
+    @Synchronized
+    fun removeAll(items: List<Item>): Int {
+        var n = 0
+        items.forEach { item ->
+            val k = key(item.path, item.folder)
+            if (File(dir, "$k.jpg").delete()) n++
+            index.remove(k)
+        }
+        saveIndex()
+        _version.value++
+        return n
+    }
+
     /** Saves the index after puts made with save = false (bulk restore). */
     @Synchronized
     fun flush() {

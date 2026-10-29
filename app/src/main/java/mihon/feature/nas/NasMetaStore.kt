@@ -68,6 +68,12 @@ class NasMetaStore(context: Context) {
         if (notify) _version.value++
     }
 
+    @Synchronized
+    fun remove(zipPath: String) {
+        file(zipPath).delete()
+        cache.remove(zipPath)
+    }
+
     fun notifyChanged() {
         _version.value++
     }
