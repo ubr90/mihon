@@ -17,7 +17,14 @@ object NavBarToggle {
 
     val visible by lazy { MutableStateFlow(prefs.getBoolean("nav_bar_visible", true)) }
 
+    /** Hidden automatically while the NAS tab is open (not saved); ☰ shows it again. */
+    val autoHidden = MutableStateFlow(false)
+
     fun toggle() {
+        if (autoHidden.value) {
+            autoHidden.value = false
+            if (visible.value) return
+        }
         val v = !visible.value
         visible.value = v
         prefs.edit { putBoolean("nav_bar_visible", v) }

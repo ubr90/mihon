@@ -93,8 +93,9 @@ object HomeScreen : Screen() {
                     // Custom: the ☰ toggle can keep the tab bar hidden
                     kotlinx.coroutines.flow.combine(
                         mihon.feature.grid.NavBarToggle.visible,
+                        mihon.feature.grid.NavBarToggle.autoHidden,
                         showBottomNavEvent.receiveAsFlow().onStart { emit(true) },
-                    ) { visible, show -> visible && (tabletUi || show) }
+                    ) { visible, autoHidden, show -> visible && !autoHidden && (tabletUi || show) }
                         .collectLatest { show ->
                             if (show) {
                                 navigationSuiteState.show()
@@ -135,6 +136,11 @@ object HomeScreen : Screen() {
                         }
                     }
                 }
+            }
+
+            // Custom: the tab menu hides itself while the NAS tab is open (☰ shows it again)
+            LaunchedEffect(tabNavigator.current) {
+                mihon.feature.grid.NavBarToggle.autoHidden.value = tabNavigator.current is mihon.feature.nas.NasTab
             }
 
             val goToLibraryTab = { tabNavigator.current = LibraryTab }

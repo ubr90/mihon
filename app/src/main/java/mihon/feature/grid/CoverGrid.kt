@@ -2,6 +2,7 @@ package mihon.feature.grid
 
 import android.app.Application
 import android.content.Context
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -66,6 +67,41 @@ object CoverGridSettings {
     val nas by lazy { CoverGridProfile("nas", prefs) }
     val chapter by lazy { CoverGridProfile("chapter", prefs) }
 
+    /** NAS folders that keep their own grid settings (only that folder, not its sub folders). */
+    private val lockedDirs by lazy {
+        MutableStateFlow(prefs.getStringSet("nas_locked_dirs", emptySet()).orEmpty().toSet())
+    }
+    val nasLocked: kotlinx.coroutines.flow.StateFlow<Set<String>> get() = lockedDirs
+    private val folderProfiles = HashMap<String, CoverGridProfile>()
+
+    @Synchronized
+    private fun folderProfile(path: String): CoverGridProfile = folderProfiles.getOrPut(path) {
+        val digest = java.security.MessageDigest.getInstance("SHA-1").digest(path.toByteArray())
+        CoverGridProfile("nasdir_" + digest.joinToString("") { "%02x".format(it) }, prefs)
+    }
+
+    /** Grid settings for a NAS folder: its own when locked, otherwise the shared NAS settings. */
+    fun nasProfileFor(path: String?): CoverGridProfile =
+        if (path != null && path in lockedDirs.value) folderProfile(path) else nas
+
+    fun setNasFolderLocked(path: String, locked: Boolean) {
+        val profile = folderProfile(path)
+        if (locked) {
+            // Start from the current shared settings
+            profile.setAspectMode(nas.aspectMode.value)
+            profile.setSpacing(nas.spacing.value)
+            profile.setNameMode(nas.nameMode.value)
+            profile.setRowHeight(nas.rowHeight.value)
+            profile.setColumns(nas.columns.value)
+            lockedDirs.value = lockedDirs.value + path
+        } else {
+            profile.clear()
+            synchronized(this) { folderProfiles.remove(path) }
+            lockedDirs.value = lockedDirs.value - path
+        }
+        prefs.edit { putStringSet("nas_locked_dirs", lockedDirs.value) }
+    }
+
     val tocGrid by lazy { MutableStateFlow(prefs.getBoolean("toc_grid", true)) }
     val tocColumns by lazy { MutableStateFlow(prefs.getInt("toc_columns", 0)) }
     fun setTocGrid(v: Boolean) { tocGrid.value = v; prefs.edit { putBoolean("toc_grid", v) } }
@@ -121,6 +157,13 @@ class CoverGridProfile(private val id: String, private val prefs: android.conten
     fun cycleNameMode() = setNameMode((nameMode.value + 1) % 3)
     fun setRowHeight(v: Int) { rowHeight.value = v; prefs.edit { putInt(key("row_height"), v) } }
     fun setColumns(v: Int) { columns.value = v; prefs.edit { putInt(key("columns"), v) } }
+
+    /** Removes this profile's saved values. */
+    fun clear() {
+        prefs.edit {
+            listOf("aspect", "spacing", "name_mode", "row_height", "columns").forEach { remove(key(it)) }
+        }
+    }
 }
 
 /** Known image aspect ratios (width / height) of thumbnails that were loaded, by key. */
@@ -279,14 +322,34 @@ fun justifiedRows(ratios: List<Float>, width: Float, targetHeight: Float, spacin
 }
 
 @Composable
-fun CoverGridOptionsDialog(profile: CoverGridProfile, onDismiss: () -> Unit) {
+fun CoverGridOptionsDialog(profile: CoverGridProfile, onDismiss: () -> Unit, lockPath: String? = null) {
     val mode by profile.aspectMode.collectAsState()
     val spacing by profile.spacing.collectAsState()
+    val lockedDirs by CoverGridSettings.nasLocked.collectAsState()
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("그리드 보기") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                if (lockPath != null) {
+                    val locked = lockPath in lockedDirs
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { CoverGridSettings.setNasFolderLocked(lockPath, !locked) },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        androidx.compose.material3.Checkbox(checked = locked, onCheckedChange = null)
+                        Column(modifier = Modifier.padding(start = 8.dp)) {
+                            Text("이 폴더만 따로 고정")
+                            Text(
+                                "비율·열 수·간격·이름 표시를 이 폴더에만 따로 저장해요 (하위 폴더 제외)",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                    androidx.compose.material3.HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                }
                 Text("썸네일 비율", style = MaterialTheme.typography.titleSmall)
                 listOf(
                     CoverGridSettings.MODE_2_3,

@@ -145,14 +145,24 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
 
         BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
 
-        val nameMode by CoverGridSettings.nas.nameMode.collectAsState()
+        // Grid settings: the folder's own when "only this folder" is locked, otherwise the shared NAS ones
+        val lockedDirs by CoverGridSettings.nasLocked.collectAsState()
+        val gridProfile = remember(state.currentPath, lockedDirs) { CoverGridSettings.nasProfileFor(state.currentPath) }
+        val nameMode by gridProfile.nameMode.collectAsState()
         var gridOptions by remember { mutableStateOf(false) }
-        if (gridOptions) CoverGridOptionsDialog(profile = CoverGridSettings.nas, onDismiss = { gridOptions = false })
+        if (gridOptions) {
+            CoverGridOptionsDialog(
+                profile = gridProfile,
+                onDismiss = { gridOptions = false },
+                lockPath = state.currentPath,
+            )
+        }
         NasBrowserContent(
             state = state,
             thumbVersion = thumbVersion,
             nameMode = nameMode,
-            onCycleNames = { CoverGridSettings.nas.cycleNameMode() },
+            gridProfile = gridProfile,
+            onCycleNames = { gridProfile.cycleNameMode() },
             onGridOptions = { gridOptions = true },
             showBack = !inTab || state.stack.size > 1,
             onBack = { if (state.stack.size > 1) viewModel.goUp() else if (!inTab) navigator.pop() },
@@ -161,6 +171,8 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
             onOpen = viewModel::open,
             onSetFolderThumb = viewModel::setFolderThumbnail,
             onFolderLongPress = viewModel::onFolderLongPress,
+            onDeleteThumb = viewModel::deleteFileThumbnail,
+            onRestoreThumb = viewModel::restoreFileThumbnail,
         )
 
         state.libraryPrompt?.let { prompt ->
@@ -427,6 +439,53 @@ class NasBrowserViewModel(
                 eventChannel.send(NasEvent.Message(if (prompt.inLibrary) "서재에서 제거했어요" else "서재에 추가했어요"))
             } catch (e: Exception) {
                 eventChannel.send(NasEvent.Message("실패: ${e.message}"))
+            }
+        }
+    }
+
+    /** Long-press on an archive: remove its thumbnail (and ComicInfo) from the phone only. */
+    fun deleteFileThumbnail(entry: NasEntry) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                NasRuntime.meta.remove(entry.path)
+                thumbs.removeAll(listOf(NasThumbStore.Item(entry.path, folder = false)))
+                NasRuntime.meta.notifyChanged()
+            }
+            eventChannel.send(NasEvent.Message("폰에서 썸네일을 지웠어요"))
+        }
+    }
+
+    /** Long-press on an archive: restore only this archive's thumbnail (and ComicInfo) from the NAS backup. */
+    fun restoreFileThumbnail(entry: NasEntry) {
+        val base = settings.backupPath
+        if (base.isEmpty()) {
+            viewModelScope.launch { eventChannel.send(NasEvent.Message("NAS 설정에서 백업 폴더를 먼저 지정하세요")) }
+            return
+        }
+        viewModelScope.launch {
+            try {
+                val (thumb, meta) = withContext(Dispatchers.IO) {
+                    val item = NasThumbStore.Item(entry.path, folder = false)
+                    val image = dav.get(backupFile(item))?.also {
+                        thumbs.put(item.path, folder = false, imageBytes = it, alreadyThumbnail = true)
+                    }
+                    val xml = runCatching { dav.get(base + entry.path + ".ComicInfo.xml") }.getOrNull()?.also {
+                        NasRuntime.meta.put(entry.path, it)
+                    }
+                    (image != null) to (xml != null)
+                }
+                eventChannel.send(
+                    NasEvent.Message(
+                        when {
+                            thumb && meta -> "썸네일과 작품 정보를 복원했어요"
+                            thumb -> "썸네일을 복원했어요"
+                            meta -> "작품 정보만 복원했어요 (백업에 썸네일이 없어요)"
+                            else -> "백업에 이 파일의 썸네일이 없어요"
+                        },
+                    ),
+                )
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("복원 실패: ${e.message}"))
             }
         }
     }
@@ -743,6 +802,9 @@ private fun NasBrowserContent(
     onOpen: (NasEntry) -> Unit,
     onSetFolderThumb: (NasEntry) -> Unit,
     onFolderLongPress: (NasEntry) -> Unit,
+    gridProfile: mihon.feature.grid.CoverGridProfile,
+    onDeleteThumb: (NasEntry) -> Unit,
+    onRestoreThumb: (NasEntry) -> Unit,
 ) {
     Scaffold(
         topBar = {
@@ -813,10 +875,10 @@ private fun NasBrowserContent(
                     modifier = Modifier.align(Alignment.Center),
                 ) { Text("NAS 설정하기") }
                 else -> BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-                    val mode by CoverGridSettings.nas.aspectMode.collectAsState()
-                    val spacing by CoverGridSettings.nas.spacing.collectAsState()
-                    val rowHeight by CoverGridSettings.nas.rowHeight.collectAsState()
-                    val savedColumns by CoverGridSettings.nas.columns.collectAsState()
+                    val mode by gridProfile.aspectMode.collectAsState()
+                    val spacing by gridProfile.spacing.collectAsState()
+                    val rowHeight by gridProfile.rowHeight.collectAsState()
+                    val savedColumns by gridProfile.columns.collectAsState()
                     val columns = CoverGridSettings.columnsOrDefault(savedColumns, maxWidth.value)
                     val anyThumb = remember(state.entries, thumbVersion) {
                         state.entries.any { NasRuntime.thumbs.has(it.path, folder = it.isDirectory) }
@@ -830,11 +892,11 @@ private fun NasBrowserContent(
                             .fillMaxSize()
                             .pinchSteps(columns to layoutMode) { bigger ->
                                 if (layoutMode == CoverGridSettings.MODE_JUSTIFIED) {
-                                    CoverGridSettings.nas.setRowHeight(
-                                        CoverGridSettings.stepRowHeight(CoverGridSettings.nas.rowHeight.value, bigger),
+                                    gridProfile.setRowHeight(
+                                        CoverGridSettings.stepRowHeight(gridProfile.rowHeight.value, bigger),
                                     )
                                 } else {
-                                    CoverGridSettings.nas.setColumns(CoverGridSettings.stepColumns(columns, bigger))
+                                    gridProfile.setColumns(CoverGridSettings.stepColumns(columns, bigger))
                                 }
                             },
                         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
@@ -862,6 +924,8 @@ private fun NasBrowserContent(
                                 onClick = { onOpen(entry) },
                                 onSetFolderThumb = { onSetFolderThumb(entry) },
                                 onFolderLongPress = { onFolderLongPress(entry) },
+                                onDeleteThumb = { onDeleteThumb(entry) },
+                                onRestoreThumb = { onRestoreThumb(entry) },
                                 modifier = modifier,
                             )
                         }
@@ -928,6 +992,8 @@ private fun NasTile(
     onClick: () -> Unit,
     onSetFolderThumb: () -> Unit,
     onFolderLongPress: () -> Unit,
+    onDeleteThumb: () -> Unit,
+    onRestoreThumb: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -1001,6 +1067,22 @@ private fun NasTile(
                         onClick = {
                             menu = false
                             onSetFolderThumb()
+                        },
+                    )
+                    if (thumb != null) {
+                        DropdownMenuItem(
+                            text = { Text("썸네일 삭제하기") },
+                            onClick = {
+                                menu = false
+                                onDeleteThumb()
+                            },
+                        )
+                    }
+                    DropdownMenuItem(
+                        text = { Text("썸네일 복원하기") },
+                        onClick = {
+                            menu = false
+                            onRestoreThumb()
                         },
                     )
                 }
