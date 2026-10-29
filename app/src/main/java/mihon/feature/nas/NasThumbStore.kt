@@ -52,6 +52,9 @@ class NasThumbStore(context: Context) {
         leaves += canonDir(folderPath, forceLast = true)
     }
 
+    /** Memo-free path of [folderPath] treated as a folder that holds archives. */
+    fun canonAsLeaf(folderPath: String): String = canonDir(folderPath, forceLast = true)
+
     /** Shallow archives first, so a folder above another archive folder is known before the one below it. */
     fun learnLeaves(items: List<Item>) = items
         .filter { !it.folder }

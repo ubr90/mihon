@@ -53,6 +53,58 @@ object NasRuntime {
         }
     }
 
+    private val backupJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    /** Where a thumbnail lives in the backup folder (path as given, already memo-free or not). */
+    fun backupFilePath(item: NasThumbStore.Item): String {
+        val base = settings.backupPath
+        // Table-of-contents thumbnails use "<zip>#<folder in zip>" as path
+        if ('#' in item.path) {
+            val zip = item.path.substringBefore('#')
+            val dir = item.path.substringAfter('#')
+            return base + zip + ".toc/" + dir + ".jpg"
+        }
+        return if (item.folder) childPath(base + item.path, settings.thumbName) else base + item.path + ".jpg"
+    }
+
+    /**
+     * Uploads one thumbnail to the NAS backup (memo-free path, overwriting) and adds it to index.json.
+     * Returns a short note for the toast, or "" when no backup folder is set.
+     */
+    @Synchronized
+    fun backupOne(path: String, folder: Boolean): String {
+        val base = settings.backupPath
+        if (base.isEmpty()) return ""
+        return runCatching {
+            val file = thumbs.get(path, folder) ?: error("썸네일 없음")
+            val saved = NasThumbStore.Item(thumbs.canon(path, folder), folder)
+            val target = backupFilePath(saved)
+            val created = mutableSetOf<String>()
+            dav.mkdirs(parentPath(target), created)
+            dav.put(target, file.readBytes(), "image/jpeg")
+            // index.json: replace the entry of the same item (memo-free match), keep everything else
+            val indexPath = childPath(base, "index.json")
+            val existing = dav.get(indexPath)?.let {
+                runCatching {
+                    backupJson.parseToJsonElement(it.decodeToString()) as? kotlinx.serialization.json.JsonArray
+                }.getOrNull()
+            } ?: kotlinx.serialization.json.JsonArray(emptyList())
+            val kept = existing.filter { element ->
+                val obj = element as? kotlinx.serialization.json.JsonObject ?: return@filter true
+                val p = (obj["path"] as? kotlinx.serialization.json.JsonPrimitive)?.content ?: return@filter true
+                val f = (obj["folder"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "true"
+                !(f == folder && thumbs.canon(p, f) == saved.path)
+            }
+            val added = backupJson.encodeToJsonElement(NasThumbStore.Item.serializer(), saved)
+            dav.put(
+                indexPath,
+                kotlinx.serialization.json.JsonArray(kept + added).toString().toByteArray(),
+                "application/json",
+            )
+            " · NAS 백업함"
+        }.getOrElse { " · 백업 실패: ${it.message}" }
+    }
+
     /** Makes an archive thumbnail now: thumbnail file inside the zip first, otherwise the first page. */
     fun createArchiveThumbnail(zipPath: String): ByteArray? {
         thumbs.bytes(zipPath, folder = false)?.let { return it }
@@ -98,6 +150,7 @@ object NasSource : HttpSource() {
         // ComicInfo numbers are used only when every archive has one (mixed numbering breaks the order)
         val numbers = infos.map { it?.number?.toFloatOrNull() }
         val useNumbers = numbers.isNotEmpty() && numbers.all { it != null } && numbers.distinct().size == numbers.size
+        // Sources list the newest chapter first: the reader takes "next" from this order
         return archives.mapIndexed { i, entry ->
             SChapter.create().apply {
                 url = entry.path
@@ -105,7 +158,7 @@ object NasSource : HttpSource() {
                 chapter_number = if (useNumbers) numbers[i]!! else (i + 1).toFloat()
                 date_upload = entry.lastModified
             }
-        }
+        }.reversed()
     }
 
     fun mangaFor(folderPath: String): SManga = SManga.create().apply {

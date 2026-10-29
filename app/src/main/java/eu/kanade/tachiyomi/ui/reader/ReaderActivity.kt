@@ -681,9 +681,11 @@ class ReaderActivity : BaseActivity() {
                         folder = false,
                         imageBytes = bytes,
                     )
+                    // Also overwrite the NAS backup copy
+                    mihon.feature.nas.NasRuntime.backupOne(chapter.chapter.url, folder = false)
                 }
             }
-            toast(ok.fold({ "파일 표지로 지정했어요" }, { "지정하지 못했어요: ${it.message}" }))
+            toast(ok.fold({ "파일 표지로 지정했어요$it" }, { "지정하지 못했어요: ${it.message}" }))
         }
     }
 
@@ -700,8 +702,9 @@ class ReaderActivity : BaseActivity() {
                     val toc = mihon.feature.nas.buildToc(zip.pages(runtime.settings.thumbName).map { it.name })
                     val entry = toc.lastOrNull { it.pageIndex <= page.index } ?: return@runCatching "목차가 없어요"
                     val bytes = mihon.feature.nas.NasSource.pageBytes(page)
-                    runtime.thumbs.put(mihon.feature.nas.tocThumbPath(zipPath, entry), folder = false, imageBytes = bytes)
-                    "'${entry.name}' 목차 표지로 지정했어요"
+                    val key = mihon.feature.nas.tocThumbPath(zipPath, entry)
+                    runtime.thumbs.put(key, folder = false, imageBytes = bytes)
+                    "'${entry.name}' 목차 표지로 지정했어요" + runtime.backupOne(key, folder = false)
                 }.getOrElse { "지정하지 못했어요: ${it.message}" }
             }
             toast(message)

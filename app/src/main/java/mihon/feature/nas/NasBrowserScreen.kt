@@ -171,7 +171,7 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
             onGridOptions = { gridOptions = true },
             showBack = !inTab || state.stack.size > 1,
             onBack = { if (state.stack.size > 1) viewModel.goUp() else if (!inTab) navigator.pop() },
-            onRefresh = viewModel::reload,
+            onRefresh = viewModel::refresh,
             onOpenSettings = { viewModel.showSettings(true) },
             onOpen = viewModel::open,
             onSetFolderThumb = viewModel::setFolderThumbnail,
@@ -352,7 +352,10 @@ class NasBrowserViewModel(
         reload()
     }
 
-    fun reload() {
+    /** Refresh button: list again, then take this folder's thumbnails from the NAS backup (overwriting). */
+    fun refresh() = reload(restoreFromBackup = true)
+
+    fun reload(restoreFromBackup: Boolean = false) {
         val path = _state.value.currentPath ?: return
         if (!settings.isConfigured) return
         _state.update { it.copy(loading = true, error = null) }
@@ -369,6 +372,7 @@ class NasBrowserViewModel(
                 // A folder holding archives is matched without its "[memo]"
                 if (visible.any { !it.isDirectory }) thumbs.markLeaf(path)
                 _state.update { it.copy(entries = visible, loading = false) }
+                if (restoreFromBackup && settings.backupPath.isNotEmpty()) restoreVisible(visible)
 
                 // Thumbnail image inside the current folder counts for this folder
                 if (!thumbs.has(path, folder = true) && list.any { it.name.equals(thumbName, true) }) {
@@ -379,6 +383,53 @@ class NasBrowserViewModel(
                 logcat(LogPriority.ERROR, e) { "NAS list failed" }
                 _state.update { it.copy(loading = false, error = e.message ?: e.toString()) }
             }
+        }
+    }
+
+    /**
+     * Restores the thumbnails of the items shown in this folder (folders: folder thumbnail,
+     * archives: archive thumbnail + ComicInfo) from the backup folder, overwriting the phone copies.
+     */
+    private fun restoreVisible(entries: List<NasEntry>) {
+        val base = settings.backupPath
+        viewModelScope.launch {
+            val n = AtomicInteger()
+            withContext(Dispatchers.IO) {
+                val limit = Semaphore(6)
+                coroutineScope {
+                    entries.forEach { entry ->
+                        launch {
+                            limit.withPermit {
+                                val folder = entry.isDirectory
+                                // Memo-free path first (PC tool / new backups), then the exact one (older app backups).
+                                // A sub folder not known to hold archives yet is also tried without its memo.
+                                val asLeaf = if (folder) thumbs.canonAsLeaf(entry.path) else null
+                                val paths = listOfNotNull(thumbs.canon(entry.path, folder), asLeaf, entry.path).distinct()
+                                var foundAt: String? = null
+                                val bytes = paths.firstNotNullOfOrNull { p ->
+                                    runCatching { dav.get(backupFile(NasThumbStore.Item(p, folder))) }.getOrNull()
+                                        ?.also { foundAt = p }
+                                }
+                                if (bytes != null) {
+                                    if (folder && foundAt == asLeaf) thumbs.markLeaf(entry.path)
+                                    thumbs.put(entry.path, folder, bytes, alreadyThumbnail = true, save = false)
+                                    n.incrementAndGet()
+                                }
+                                if (!folder) {
+                                    paths.firstNotNullOfOrNull { p ->
+                                        runCatching { dav.get(base + p + ".ComicInfo.xml") }.getOrNull()
+                                    }?.let { NasRuntime.meta.put(entry.path, it, notify = false) }
+                                }
+                            }
+                        }
+                    }
+                }
+                thumbs.flush()
+                NasRuntime.meta.notifyChanged()
+            }
+            eventChannel.send(
+                NasEvent.Message(if (n.get() > 0) "백업에서 썸네일 ${n.get()}개 받았어요" else "백업에 이 폴더 썸네일이 없어요"),
+            )
         }
     }
 
@@ -532,7 +583,8 @@ class NasBrowserViewModel(
                     val bytes = NasRuntime.createArchiveThumbnail(entry.path) ?: error("이미지가 없어요")
                     thumbs.put(parentPath(entry.path), folder = true, imageBytes = bytes, alreadyThumbnail = true)
                 }
-                eventChannel.send(NasEvent.Message("폴더 썸네일로 지정했어요"))
+                val note = withContext(Dispatchers.IO) { NasRuntime.backupOne(parentPath(entry.path), folder = true) }
+                eventChannel.send(NasEvent.Message("폴더 썸네일로 지정했어요$note"))
             } catch (e: Exception) {
                 eventChannel.send(NasEvent.Message("지정 실패: ${e.message}"))
             }
@@ -542,16 +594,7 @@ class NasBrowserViewModel(
     private val json = Json { ignoreUnknownKeys = true }
     private val itemsSerializer = ListSerializer(NasThumbStore.Item.serializer())
 
-    private fun backupFile(item: NasThumbStore.Item): String {
-        val base = settings.backupPath
-        // Table-of-contents thumbnails use "<zip>#<folder in zip>" as path
-        if ('#' in item.path) {
-            val zip = item.path.substringBefore('#')
-            val dir = item.path.substringAfter('#')
-            return base + zip + ".toc/" + dir + ".jpg"
-        }
-        return if (item.folder) childPath(base + item.path, settings.thumbName) else base + item.path + ".jpg"
-    }
+    private fun backupFile(item: NasThumbStore.Item): String = NasRuntime.backupFilePath(item)
 
     private var selectionItems: List<NasThumbStore.Item> = emptyList()
     private var restoreNoMeta: Set<String> = emptySet()
@@ -1106,22 +1149,6 @@ private fun NasTile(
                         onClick = {
                             menu = false
                             onSetFolderThumb()
-                        },
-                    )
-                    if (thumb != null) {
-                        DropdownMenuItem(
-                            text = { Text("썸네일 삭제하기") },
-                            onClick = {
-                                menu = false
-                                onDeleteThumb()
-                            },
-                        )
-                    }
-                    DropdownMenuItem(
-                        text = { Text("썸네일 복원하기") },
-                        onClick = {
-                            menu = false
-                            onRestoreThumb()
                         },
                     )
                 }
