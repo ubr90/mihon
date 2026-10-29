@@ -274,8 +274,10 @@ private fun TocTile(
         if (!NasRuntime.thumbs.has(key, folder = false) && firstPage != null) {
             withContext(Dispatchers.IO) {
                 runCatching {
-                    val bytes = RemoteZip.open(NasRuntime.dav, zipPath).read(firstPage)
-                    NasRuntime.thumbs.put(key, folder = false, imageBytes = bytes)
+                    // NAS backup first, otherwise the entry's first page (then backed up)
+                    NasRuntime.restoreOrMake(key, folder = false) {
+                        RemoteZip.open(NasRuntime.dav, zipPath).read(firstPage)
+                    }
                 }
             }
         }

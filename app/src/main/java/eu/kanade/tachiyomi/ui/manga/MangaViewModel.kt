@@ -318,8 +318,10 @@ class MangaViewModel(
             // The state loads the entry and its chapters anyway, so they aren't queried separately
             val loadedState = state.filterIsInstance<State.Success>().first()
             val manga = loadedState.manga
-            val needRefreshInfo = !manga.initialized
-            val needRefreshChapter = loadedState.chapters.isEmpty()
+            // Custom: NAS entries always re-read the folder (names, order, series info) — it's one quick request
+            val isNas = manga.source == mihon.feature.nas.NasSource.SOURCE_ID
+            val needRefreshInfo = !manga.initialized || isNas
+            val needRefreshChapter = loadedState.chapters.isEmpty() || isNas
 
             // Fetch info-chapters when needed
             if (needRefreshInfo || needRefreshChapter) {

@@ -44,13 +44,39 @@ object NasRuntime {
      * Saves an archive thumbnail (if it has none yet) and uses it for the folder when the folder has none.
      */
     fun onArchiveImage(zipPath: String, bytes: ByteArray) {
-        if (thumbs.has(zipPath, folder = false)) return
-        val small = NasThumbStore.downscale(bytes) ?: return
-        thumbs.put(zipPath, folder = false, imageBytes = small, alreadyThumbnail = true)
-        val folder = parentPath(zipPath)
-        if (!thumbs.has(folder, folder = true)) {
-            thumbs.put(folder, folder = true, imageBytes = small, alreadyThumbnail = true)
+        if (!restoreOrMake(zipPath, folder = false) { bytes }) return
+        // The folder gets the archive's thumbnail when it has none (also checked in the backup first)
+        restoreOrMake(parentPath(zipPath), folder = true) { thumbs.bytes(zipPath, folder = false) }
+    }
+
+    /** The thumbnail in the NAS backup (memo-free path first, then the exact one), or null. */
+    fun fetchBackup(path: String, folder: Boolean): ByteArray? {
+        if (settings.backupPath.isEmpty()) return null
+        val paths = listOfNotNull(
+            thumbs.canon(path, folder),
+            if (folder) thumbs.canonAsLeaf(path) else null,
+            path,
+        ).distinct()
+        return paths.firstNotNullOfOrNull { p ->
+            runCatching { dav.get(backupFilePath(NasThumbStore.Item(p, folder))) }.getOrNull()
         }
+    }
+
+    /**
+     * Makes sure a thumbnail exists on the phone: nothing to do when it does; otherwise the NAS backup copy,
+     * otherwise one made by [make] (an image, downscaled here) which is then backed up to the NAS.
+     */
+    fun restoreOrMake(path: String, folder: Boolean, make: () -> ByteArray?): Boolean {
+        if (thumbs.has(path, folder)) return true
+        fetchBackup(path, folder)?.let {
+            thumbs.put(path, folder, it, alreadyThumbnail = true)
+            return true
+        }
+        val bytes = make() ?: return false
+        val small = NasThumbStore.downscale(bytes) ?: return false
+        thumbs.put(path, folder, small, alreadyThumbnail = true)
+        backupOne(path, folder)
+        return true
     }
 
     private val backupJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }

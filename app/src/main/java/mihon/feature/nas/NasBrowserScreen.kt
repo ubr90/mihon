@@ -353,7 +353,11 @@ class NasBrowserViewModel(
     }
 
     /** Refresh button: list again, then take this folder's thumbnails from the NAS backup (overwriting). */
-    fun refresh() = reload(restoreFromBackup = true)
+    fun refresh() {
+        _state.value.currentPath?.let { RemoteZip.forgetFolder(it) }
+        probed.clear()
+        reload(restoreFromBackup = true)
+    }
 
     fun reload(restoreFromBackup: Boolean = false) {
         val path = _state.value.currentPath ?: return
@@ -372,7 +376,7 @@ class NasBrowserViewModel(
                 // A folder holding archives is matched without its "[memo]"
                 if (visible.any { !it.isDirectory }) thumbs.markLeaf(path)
                 _state.update { it.copy(entries = visible, loading = false) }
-                if (restoreFromBackup && settings.backupPath.isNotEmpty()) restoreVisible(visible)
+                if (restoreFromBackup) restoreVisible(path, visible)
 
                 // Thumbnail image inside the current folder counts for this folder
                 if (!thumbs.has(path, folder = true) && list.any { it.name.equals(thumbName, true) }) {
@@ -390,11 +394,11 @@ class NasBrowserViewModel(
      * Restores the thumbnails of the items shown in this folder (folders: folder thumbnail,
      * archives: archive thumbnail + ComicInfo) from the backup folder, overwriting the phone copies.
      */
-    private fun restoreVisible(entries: List<NasEntry>) {
+    private fun restoreVisible(folderPath: String, entries: List<NasEntry>) {
         val base = settings.backupPath
         viewModelScope.launch {
             val n = AtomicInteger()
-            withContext(Dispatchers.IO) {
+            if (base.isNotEmpty()) withContext(Dispatchers.IO) {
                 val limit = Semaphore(6)
                 coroutineScope {
                     entries.forEach { entry ->
@@ -424,11 +428,50 @@ class NasBrowserViewModel(
                         }
                     }
                 }
+                // Table-of-contents thumbnails of the archives here, found through index.json
+                val zips = entries.filter { !it.isDirectory }
+                if (zips.isNotEmpty()) {
+                    runCatching {
+                        val index = dav.get(childPath(base, "index.json"))?.let {
+                            json.decodeFromString(itemsSerializer, it.decodeToString())
+                        }.orEmpty()
+                        val wanted = zips.associateBy { thumbs.canon(it.path, folder = false) }
+                        val tocItems = index.filter { '#' in it.path && thumbs.canon(it.path.substringBefore('#'), false) in wanted }
+                        val limit = Semaphore(6)
+                        coroutineScope {
+                            tocItems.forEach { item ->
+                                launch {
+                                    limit.withPermit {
+                                        runCatching { dav.get(backupFile(item)) }.getOrNull()?.let {
+                                            thumbs.put(item.path, folder = false, it, alreadyThumbnail = true, save = false)
+                                            n.incrementAndGet()
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 thumbs.flush()
                 NasRuntime.meta.notifyChanged()
             }
+            // Archive names, order and series info of this folder (library entry included) from the NAS
+            if (entries.any { !it.isDirectory }) {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val manga = networkToLocalManga(NasSource.mangaFor(folderPath).toDomainManga(NasSource.SOURCE_ID))
+                        updateMangaFromRemote(NasSource, manga, fetchDetails = true, fetchChapters = true)
+                    }
+                }
+            }
             eventChannel.send(
-                NasEvent.Message(if (n.get() > 0) "백업에서 썸네일 ${n.get()}개 받았어요" else "백업에 이 폴더 썸네일이 없어요"),
+                NasEvent.Message(
+                    when {
+                        base.isEmpty() -> "새로고침했어요 (백업 폴더 미지정)"
+                        n.get() > 0 -> "새로고침 · 백업에서 썸네일 ${n.get()}개 받았어요"
+                        else -> "새로고침했어요 (백업에 이 폴더 썸네일 없음)"
+                    },
+                ),
             )
         }
     }

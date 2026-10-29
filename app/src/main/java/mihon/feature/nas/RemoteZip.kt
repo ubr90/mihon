@@ -91,6 +91,11 @@ class RemoteZip(
             override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, RemoteZip>?) = size > 8
         }
 
+        /** Forgets cached archive listings in [folder] (refresh: files may have changed on the NAS). */
+        fun forgetFolder(folder: String) {
+            synchronized(cache) { cache.keys.removeAll { parentPath(it) == folder } }
+        }
+
         fun open(dav: NasWebDav, path: String): RemoteZip {
             synchronized(cache) { cache[path]?.let { return it } }
             val zip = RemoteZip(dav, path, readCentralDirectory(dav, path))
