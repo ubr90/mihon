@@ -60,15 +60,16 @@ class NasMetaStore(context: Context) {
     }
 
     /** Keyed by the archive path without its folder's "[memo]", like the thumbnails. */
-    private fun file(zipPath: String): File = rawFile(NasThumbStore.canonZipPath(zipPath))
+    private fun file(zipPath: String): File = rawFile(NasRuntime.thumbs.canon(zipPath, folder = false))
 
     /** Moves files saved under the exact archive path to the memo-free name (once). */
     fun migrate(zipPaths: List<String>) {
         zipPaths.forEach { path ->
-            val old = rawFile(path)
             val new = file(path)
-            if (old != new && old.exists()) {
-                if (new.exists()) old.delete() else old.renameTo(new)
+            listOf(rawFile(path), rawFile(NasThumbStore.oldCanonZipPath(path))).distinct().forEach { old ->
+                if (old != new && old.exists()) {
+                    if (new.exists()) old.delete() else old.renameTo(new)
+                }
             }
         }
     }

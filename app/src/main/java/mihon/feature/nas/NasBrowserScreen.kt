@@ -494,10 +494,17 @@ class NasBrowserViewModel(
             try {
                 val (thumb, meta) = withContext(Dispatchers.IO) {
                     val item = NasThumbStore.Item(entry.path, folder = false)
-                    val image = dav.get(backupFile(item))?.also {
+                    // Backups use the memo-free path (PC tool, new app backups); older app backups the exact one
+                    val canonPath = thumbs.canon(entry.path, folder = false)
+                    val paths = listOf(canonPath, entry.path).distinct()
+                    val image = paths.firstNotNullOfOrNull { p ->
+                        runCatching { dav.get(backupFile(NasThumbStore.Item(p, folder = false))) }.getOrNull()
+                    }?.also {
                         thumbs.put(item.path, folder = false, imageBytes = it, alreadyThumbnail = true)
                     }
-                    val xml = runCatching { dav.get(base + entry.path + ".ComicInfo.xml") }.getOrNull()?.also {
+                    val xml = paths.firstNotNullOfOrNull { p ->
+                        runCatching { dav.get(base + p + ".ComicInfo.xml") }.getOrNull()
+                    }?.also {
                         NasRuntime.meta.put(entry.path, it)
                     }
                     (image != null) to (xml != null)
@@ -706,10 +713,12 @@ class NasBrowserViewModel(
                                 limit.withPermit {
                                     val file = thumbs.file(item.path, item.folder)
                                     if (file.exists()) {
-                                        val target = backupFile(item)
+                                        // Saved under the memo-free path, the same rule as the PC tool
+                                        val saved = item.copy(path = thumbs.canon(item.path, item.folder))
+                                        val target = backupFile(saved)
                                         synchronized(created) { dav.mkdirs(parentPath(target), created) }
                                         dav.put(target, file.readBytes(), "image/jpeg")
-                                        done += item
+                                        done += saved
                                     }
                                     setProgress("백업 중", counter.incrementAndGet(), items.size)
                                 }
