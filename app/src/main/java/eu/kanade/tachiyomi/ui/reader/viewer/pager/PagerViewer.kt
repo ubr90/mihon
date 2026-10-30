@@ -110,8 +110,16 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
             activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
 
     /** Called by a page holder when a page of its pair is wide/animated and must be shown alone. */
-    fun onDualSingle(pages: List<ReaderPage>, keep: ReaderPage) {
-        pages.forEach { adapter.markSingle(it, keep) }
+    fun onDualSingle(pages: List<ReaderPage>, holderPage: ReaderPage, holderPartner: ReaderPage) {
+        // A holder made before the last re-pairing may still report: its pair no longer exists, ignore it
+        if (adapter.partnerOf(holderPage) !== holderPartner) return
+        // Keep the page that is on screen, not the holder's: neighbour pairs are loaded off screen too, and
+        // moving to them made the reader jump and record a wrong page (seen when turning back to portrait)
+        val shown = adapter.items.getOrNull(pager.currentItem) as? ReaderPage
+        val position = pager.currentItem
+        pages.forEach { adapter.markSingle(it, shown) }
+        // The pager doesn't report a page when it stays at the same index with new content
+        if (pager.currentItem == position) onPageChange(position)
     }
 
     // ---- Custom: neighbour pages stick to the current one while swiping ----

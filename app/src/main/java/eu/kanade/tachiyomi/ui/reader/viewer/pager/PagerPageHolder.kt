@@ -188,7 +188,7 @@ class PagerPageHolder(
                     )
                 }
                 if (bad.isNotEmpty()) {
-                    withContext(Dispatchers.Main) { viewer.onDualSingle(bad, page) }
+                    withContext(Dispatchers.Main) { viewer.onDualSingle(bad, page, second) }
                     return
                 }
             }
