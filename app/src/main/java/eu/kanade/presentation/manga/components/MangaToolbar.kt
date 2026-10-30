@@ -47,6 +47,8 @@ fun MangaToolbar(
     titleAlphaProvider: () -> Float,
     backgroundAlphaProvider: () -> Float,
     modifier: Modifier = Modifier,
+    // Custom: shared grid buttons ([info] [grid settings] [names]), hidden while selecting
+    gridActions: (@Composable () -> Unit)? = null,
 ) {
     val isActionMode = actionModeCounter > 0
     AppBar(
@@ -72,6 +74,8 @@ fun MangaToolbar(
                     onDownloadClicked = onClickDownload,
                 )
             }
+
+            if (!isActionMode) gridActions?.invoke()
 
             val filterTint = if (hasFilters) MaterialTheme.colorScheme.active else LocalContentColor.current
             AppBarActions(

@@ -17,6 +17,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
@@ -26,7 +29,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -35,6 +40,12 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
+import mihon.icons.materialsymbols.MaterialSymbols
+import mihon.icons.materialsymbols.rounded.Code
+import mihon.icons.materialsymbols.rounded.Info
+import mihon.icons.materialsymbols.roundedfilled.ViewModule
+import mihon.icons.materialsymbols.roundedfilled.Visibility
+import mihon.icons.materialsymbols.roundedfilled.VisibilityOff
 import uy.kohesive.injekt.injectLazy
 
 /**
@@ -68,6 +79,16 @@ object CoverGridSettings {
     val nas by lazy { CoverGridProfile("nas", prefs) }
     val chapter by lazy { CoverGridProfile("chapter", prefs) }
     private val albumProfiles = HashMap<String, CoverGridProfile>()
+
+    /**
+     * Profile by id, used to pass grid settings to the series (manga) screen:
+     * "nas", "album_<id>", anything else (or null) = library.
+     */
+    fun profileById(id: String?): CoverGridProfile = when {
+        id == "nas" -> nas
+        id != null && id.startsWith("album_") -> albumProfile(id.removePrefix("album_"))
+        else -> chapter
+    }
 
     /** Each album keeps its own grid look. */
     fun albumProfile(id: String): CoverGridProfile =
@@ -119,6 +140,7 @@ object CoverGridSettings {
             profile.setNameMode(nas.nameMode.value)
             profile.setRowHeight(nas.rowHeight.value)
             profile.setColumns(nas.columns.value)
+            profile.setShowInfo(nas.showInfo.value)
             lockedDirs.value = lockedDirs.value + keyPath
         } else {
             profile.clear()
@@ -166,7 +188,7 @@ object CoverGridSettings {
  * One set of grid view settings. Values saved before the split (shared keys) are used as the
  * starting point for both profiles.
  */
-class CoverGridProfile(private val id: String, private val prefs: android.content.SharedPreferences) {
+class CoverGridProfile(val id: String, private val prefs: android.content.SharedPreferences) {
     private fun key(name: String) = "${id}_$name"
     private fun int(name: String, legacy: String, default: Int) =
         prefs.getInt(key(name), prefs.getInt(legacy, default))
@@ -177,17 +199,21 @@ class CoverGridProfile(private val id: String, private val prefs: android.conten
     val rowHeight = MutableStateFlow(int("row_height", "row_height", 200))
     val columns = MutableStateFlow(int("columns", "${id}_columns", 0))
 
+    /** Series information (cover, title, authors, tags, summary) above the volumes. */
+    val showInfo = MutableStateFlow(prefs.getBoolean(key("show_info"), true))
+
     fun setAspectMode(v: Int) { aspectMode.value = v; prefs.edit { putInt(key("aspect"), v) } }
     fun setSpacing(v: Int) { spacing.value = v; prefs.edit { putInt(key("spacing"), v) } }
     fun setNameMode(v: Int) { nameMode.value = v; prefs.edit { putInt(key("name_mode"), v) } }
     fun cycleNameMode() = setNameMode((nameMode.value + 1) % 3)
     fun setRowHeight(v: Int) { rowHeight.value = v; prefs.edit { putInt(key("row_height"), v) } }
     fun setColumns(v: Int) { columns.value = v; prefs.edit { putInt(key("columns"), v) } }
+    fun setShowInfo(v: Boolean) { showInfo.value = v; prefs.edit { putBoolean(key("show_info"), v) } }
 
     /** Removes this profile's saved values. */
     fun clear() {
         prefs.edit {
-            listOf("aspect", "spacing", "name_mode", "row_height", "columns").forEach { remove(key(it)) }
+            listOf("aspect", "spacing", "name_mode", "row_height", "columns", "show_info").forEach { remove(key(it)) }
         }
     }
 }
@@ -225,6 +251,55 @@ fun Modifier.pinchSteps(key: Any?, onStep: (bigger: Boolean) -> Unit): Modifier 
             }
         } while (event.changes.any { it.pressed })
     }
+}
+
+/** Pinch on a grid: changes the row height in "same height" mode, otherwise the column count. */
+fun Modifier.coverGridPinch(profile: CoverGridProfile, columns: Int, mode: Int): Modifier =
+    pinchSteps(Triple(profile.id, columns, mode)) { bigger ->
+        if (mode == CoverGridSettings.MODE_JUSTIFIED) {
+            profile.setRowHeight(CoverGridSettings.stepRowHeight(profile.rowHeight.value, bigger))
+        } else {
+            profile.setColumns(CoverGridSettings.stepColumns(columns, bigger))
+        }
+    }
+
+/**
+ * Custom: the same grid buttons in every top bar (NAS, album, series screen), always in this order:
+ * [series info on/off] [grid settings] [name 3 modes].
+ * The info button only shows where series information is displayed.
+ */
+@Composable
+fun CoverGridActions(
+    profile: CoverGridProfile,
+    showInfoToggle: Boolean = false,
+    lockPath: String? = null,
+) {
+    val nameMode by profile.nameMode.collectAsState()
+    val showInfo by profile.showInfo.collectAsState()
+    var options by remember { mutableStateOf(false) }
+    if (showInfoToggle) {
+        IconButton(onClick = { profile.setShowInfo(!showInfo) }) {
+            Icon(
+                imageVector = MaterialSymbols.Rounded.Info,
+                contentDescription = "작품 정보",
+                tint = if (showInfo) MaterialTheme.colorScheme.primary else LocalContentColor.current.copy(alpha = 0.5f),
+            )
+        }
+    }
+    IconButton(onClick = { options = true }) {
+        Icon(MaterialSymbols.RoundedFilled.ViewModule, contentDescription = "그리드 설정")
+    }
+    IconButton(onClick = { profile.cycleNameMode() }) {
+        Icon(
+            imageVector = when (nameMode) {
+                CoverGridSettings.NAME_SHOW -> MaterialSymbols.RoundedFilled.Visibility
+                CoverGridSettings.NAME_HIDE -> MaterialSymbols.RoundedFilled.VisibilityOff
+                else -> MaterialSymbols.Rounded.Code
+            },
+            contentDescription = "이름 표시",
+        )
+    }
+    if (options) CoverGridOptionsDialog(profile = profile, onDismiss = { options = false }, lockPath = lockPath)
 }
 
 /**

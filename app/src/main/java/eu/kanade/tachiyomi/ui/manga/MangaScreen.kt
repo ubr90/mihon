@@ -67,6 +67,8 @@ import tachiyomi.presentation.core.util.collectAsState
 class MangaScreen(
     private val mangaId: Long,
     val fromSource: Boolean = false,
+    // Custom: which grid settings to use ("album_<id>" when opened from an album, null = library)
+    private val gridProfileId: String? = null,
 ) : Screen(), AssistContentScreen {
 
     private var assistUrl: String? = null
@@ -106,29 +108,13 @@ class MangaScreen(
             }
         }
 
-        val chapterGridView by viewModel.chapterGridViewPref.collectAsState()
-        val chapterGridOnly by viewModel.chapterGridOnlyPref.collectAsState()
         val chapterThumbnailRefreshedAt by viewModel.chapterThumbnailRefreshedAtPref.collectAsState()
+        val gridProfile = remember(gridProfileId) { mihon.feature.grid.CoverGridSettings.profileById(gridProfileId) }
 
         MangaScreen(
             state = successState,
-            chapterGridView = chapterGridView,
-            chapterGridOnly = chapterGridOnly,
+            gridProfile = gridProfile,
             chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
-            onToggleChapterGridView = {
-                // list -> grid -> grid only -> list
-                when {
-                    !chapterGridView -> {
-                        viewModel.chapterGridOnlyPref.set(false)
-                        viewModel.chapterGridViewPref.set(true)
-                    }
-                    !chapterGridOnly -> viewModel.chapterGridOnlyPref.set(true)
-                    else -> {
-                        viewModel.chapterGridOnlyPref.set(false)
-                        viewModel.chapterGridViewPref.set(false)
-                    }
-                }
-            },
             snackbarHostState = viewModel.snackbarHostState,
             nextUpdate = successState.manga.expectedNextUpdate,
             isTabletUi = isTabletUi(),

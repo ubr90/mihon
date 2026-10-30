@@ -77,6 +77,9 @@ import mihon.feature.grid.CoverAspectCache
 import mihon.feature.grid.CoverGridSettings
 import mihon.feature.grid.CoverTile
 import mihon.feature.grid.coverGridItems
+import mihon.feature.grid.CoverGridActions
+import mihon.feature.grid.CoverGridProfile
+import mihon.feature.grid.coverGridPinch
 import mihon.feature.grid.pinchSteps
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.roundedfilled.PlayArrow
@@ -98,10 +101,8 @@ import kotlin.time.Instant
 @Composable
 fun MangaScreen(
     state: MangaViewModel.State.Success,
-    chapterGridView: Boolean,
-    chapterGridOnly: Boolean,
+    gridProfile: CoverGridProfile,
     chapterThumbnailRefreshedAt: Long,
-    onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
     nextUpdate: Instant?,
     isTabletUi: Boolean,
@@ -159,10 +160,8 @@ fun MangaScreen(
     if (!isTabletUi) {
         MangaScreenSmallImpl(
             state = state,
-            chapterGridView = chapterGridView,
-            chapterGridOnly = chapterGridOnly,
+            gridProfile = gridProfile,
             chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
-            onToggleChapterGridView = onToggleChapterGridView,
             snackbarHostState = snackbarHostState,
             nextUpdate = nextUpdate,
             chapterSwipeStartAction = chapterSwipeStartAction,
@@ -200,10 +199,8 @@ fun MangaScreen(
     } else {
         MangaScreenLargeImpl(
             state = state,
-            chapterGridView = chapterGridView,
-            chapterGridOnly = chapterGridOnly,
+            gridProfile = gridProfile,
             chapterThumbnailRefreshedAt = chapterThumbnailRefreshedAt,
-            onToggleChapterGridView = onToggleChapterGridView,
             snackbarHostState = snackbarHostState,
             chapterSwipeStartAction = chapterSwipeStartAction,
             chapterSwipeEndAction = chapterSwipeEndAction,
@@ -244,10 +241,8 @@ fun MangaScreen(
 @Composable
 private fun MangaScreenSmallImpl(
     state: MangaViewModel.State.Success,
-    chapterGridView: Boolean,
-    chapterGridOnly: Boolean,
+    gridProfile: CoverGridProfile,
     chapterThumbnailRefreshedAt: Long,
-    onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
     nextUpdate: Instant?,
     chapterSwipeStartAction: LibraryPreferences.ChapterSwipeAction,
@@ -308,15 +303,10 @@ private fun MangaScreenSmallImpl(
     val hasChapterThumbnails = remember(chapters, thumbnailBaseUrl) {
         chapters.any { chapterThumbnailUrl(it.chapter.url, thumbnailBaseUrl) != null }
     }
-    val showGrid = chapterGridView && hasChapterThumbnails
-    val gridOnly = showGrid && chapterGridOnly
-    val headerViewMode = when {
-        !hasChapterThumbnails -> null
-        gridOnly -> CHAPTER_VIEW_GRID_ONLY
-        showGrid -> CHAPTER_VIEW_GRID
-        else -> CHAPTER_VIEW_LIST
-    }
-    val coverConfig = rememberChapterCoverGridConfig(gridOnly)
+    // Custom: volumes are always a cover grid; the series information can be switched off
+    val showInfo by gridProfile.showInfo.collectAsState()
+    val gridOnly = !showInfo
+    val coverConfig = rememberChapterCoverGridConfig(gridProfile, hasChapterThumbnails)
 
     BackHandler(enabled = isAnySelected) {
         onAllChapterSelected(false)
@@ -355,6 +345,7 @@ private fun MangaScreenSmallImpl(
                 onInvertSelection = { onInvertSelection() },
                 titleAlphaProvider = { titleAlpha },
                 backgroundAlphaProvider = { backgroundAlpha },
+                gridActions = { CoverGridActions(profile = gridProfile, showInfoToggle = true) },
             )
         },
         bottomBar = {
@@ -404,7 +395,7 @@ private fun MangaScreenSmallImpl(
                 endContentPadding = contentPadding.calculateEndPadding(layoutDirection),
             ) {
                 LazyColumn(
-                    modifier = Modifier.fillMaxHeight().chapterGridPinch(coverConfig),
+                    modifier = Modifier.fillMaxHeight().chapterGridPinch(gridProfile, coverConfig),
                     state = chapterListState,
                     contentPadding = PaddingValues(
                         start = contentPadding.calculateStartPadding(layoutDirection),
@@ -461,7 +452,7 @@ private fun MangaScreenSmallImpl(
                         )
                     }
 
-                    item(
+                    if (!gridOnly) item(
                         key = MangaScreenItem.CHAPTER_HEADER,
                         contentType = MangaScreenItem.CHAPTER_HEADER,
                     ) {
@@ -470,9 +461,6 @@ private fun MangaScreenSmallImpl(
                             chapterCount = chapters.size,
                             missingChapterCount = state.missingChapterCount,
                             onClick = onFilterClicked,
-                            viewMode = headerViewMode,
-                            nameMode = coverConfig?.nameMode,
-                            onToggleGridView = onToggleChapterGridView,
                         )
                     }
 
@@ -480,7 +468,6 @@ private fun MangaScreenSmallImpl(
                         manga = state.manga,
                         chapters = listItem,
                         thumbnailBaseUrl = thumbnailBaseUrl,
-                        showAsGrid = showGrid,
                         coverConfig = coverConfig,
                         thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                         isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
@@ -501,10 +488,8 @@ private fun MangaScreenSmallImpl(
 @Composable
 fun MangaScreenLargeImpl(
     state: MangaViewModel.State.Success,
-    chapterGridView: Boolean,
-    chapterGridOnly: Boolean,
+    gridProfile: CoverGridProfile,
     chapterThumbnailRefreshedAt: Long,
-    onToggleChapterGridView: () -> Unit,
     snackbarHostState: SnackbarHostState,
     nextUpdate: Instant?,
     chapterSwipeStartAction: LibraryPreferences.ChapterSwipeAction,
@@ -566,15 +551,10 @@ fun MangaScreenLargeImpl(
     val hasChapterThumbnails = remember(chapters, thumbnailBaseUrl) {
         chapters.any { chapterThumbnailUrl(it.chapter.url, thumbnailBaseUrl) != null }
     }
-    val showGrid = chapterGridView && hasChapterThumbnails
-    val gridOnly = showGrid && chapterGridOnly
-    val headerViewMode = when {
-        !hasChapterThumbnails -> null
-        gridOnly -> CHAPTER_VIEW_GRID_ONLY
-        showGrid -> CHAPTER_VIEW_GRID
-        else -> CHAPTER_VIEW_LIST
-    }
-    val coverConfig = rememberChapterCoverGridConfig(gridOnly)
+    // Custom: volumes are always a cover grid; the series information can be switched off
+    val showInfo by gridProfile.showInfo.collectAsState()
+    val gridOnly = !showInfo
+    val coverConfig = rememberChapterCoverGridConfig(gridProfile, hasChapterThumbnails)
 
     val insetPadding = WindowInsets.systemBars.only(WindowInsetsSides.Horizontal).asPaddingValues()
     var topBarHeight by remember { mutableIntStateOf(0) }
@@ -605,6 +585,7 @@ fun MangaScreenLargeImpl(
                 onInvertSelection = { onInvertSelection() },
                 titleAlphaProvider = { 1f },
                 backgroundAlphaProvider = { 1f },
+                gridActions = { CoverGridActions(profile = gridProfile, showInfoToggle = true) },
             )
         },
         bottomBar = {
@@ -704,14 +685,14 @@ fun MangaScreenLargeImpl(
                         topContentPadding = contentPadding.calculateTopPadding(),
                     ) {
                         LazyColumn(
-                            modifier = Modifier.fillMaxHeight().chapterGridPinch(coverConfig),
+                            modifier = Modifier.fillMaxHeight().chapterGridPinch(gridProfile, coverConfig),
                             state = chapterListState,
                             contentPadding = PaddingValues(
                                 top = contentPadding.calculateTopPadding(),
                                 bottom = contentPadding.calculateBottomPadding(),
                             ),
                         ) {
-                            item(
+                            if (!gridOnly) item(
                                 key = MangaScreenItem.CHAPTER_HEADER,
                                 contentType = MangaScreenItem.CHAPTER_HEADER,
                             ) {
@@ -720,9 +701,6 @@ fun MangaScreenLargeImpl(
                                     chapterCount = chapters.size,
                                     missingChapterCount = state.missingChapterCount,
                                     onClick = onFilterButtonClicked,
-                                    viewMode = headerViewMode,
-                                    nameMode = coverConfig?.nameMode,
-                                    onToggleGridView = onToggleChapterGridView,
                                 )
                             }
 
@@ -730,8 +708,7 @@ fun MangaScreenLargeImpl(
                                 manga = state.manga,
                                 chapters = listItem,
                                 thumbnailBaseUrl = thumbnailBaseUrl,
-                                showAsGrid = showGrid,
-                                coverConfig = coverConfig,
+                                        coverConfig = coverConfig,
                                 thumbnailRefreshedAt = chapterThumbnailRefreshedAt,
                                 isAnyChapterSelected = state.selectedChapters.isNotEmpty(),
                                 chapterSwipeStartAction = chapterSwipeStartAction,
@@ -796,10 +773,9 @@ private fun LazyListScope.sharedChapterItems(
     manga: Manga,
     chapters: List<ChapterList>,
     thumbnailBaseUrl: String?,
-    showAsGrid: Boolean,
     thumbnailRefreshedAt: Long,
     isAnyChapterSelected: Boolean,
-    coverConfig: ChapterCoverGridConfig? = null,
+    coverConfig: ChapterCoverGridConfig,
     chapterSwipeStartAction: LibraryPreferences.ChapterSwipeAction,
     chapterSwipeEndAction: LibraryPreferences.ChapterSwipeAction,
     onChapterClicked: (Chapter) -> Unit,
@@ -808,81 +784,17 @@ private fun LazyListScope.sharedChapterItems(
     onChapterSelected: (ChapterList.Item, Boolean, Boolean) -> Unit,
     onChapterSwipe: (ChapterList.Item, LibraryPreferences.ChapterSwipeAction) -> Unit,
 ) {
-    if (showAsGrid) {
-        sharedChapterGridItems(
-            columns = CHAPTER_GRID_COLUMNS,
-            coverConfig = coverConfig,
-            manga = manga,
-            chapters = chapters,
-            thumbnailBaseUrl = thumbnailBaseUrl,
-            thumbnailRefreshedAt = thumbnailRefreshedAt,
-            isAnyChapterSelected = isAnyChapterSelected,
-            onChapterClicked = onChapterClicked,
-            onChapterSelected = onChapterSelected,
-        )
-        return
-    }
-    items(
-        items = chapters,
-        key = { item ->
-            when (item) {
-                is ChapterList.MissingCount -> "missing-count-${item.id}"
-                is ChapterList.Item -> "chapter-${item.id}"
-            }
-        },
-        contentType = { MangaScreenItem.CHAPTER },
-    ) { item ->
-        val haptic = LocalHapticFeedback.current
-
-        when (item) {
-            is ChapterList.MissingCount -> {
-                MissingChapterCountListItem(count = item.count)
-            }
-            is ChapterList.Item -> {
-                MangaChapterListItem(
-                    title = chapterDisplayTitle(manga, item.chapter),
-                    date = relativeDateText(item.chapter.dateUpload),
-                    readProgress = item.chapter.lastPageRead
-                        .takeIf { !item.chapter.read && it > 0L }
-                        ?.let {
-                            stringResource(
-                                MR.strings.chapter_progress,
-                                it + 1,
-                            )
-                        },
-                    scanlator = item.chapter.scanlator.takeIf { !it.isNullOrBlank() },
-                    read = item.chapter.read,
-                    bookmark = item.chapter.bookmark,
-                    selected = item.selected,
-                    downloadIndicatorEnabled = !isAnyChapterSelected && !manga.isLocal(),
-                    downloadStateProvider = { item.downloadState },
-                    downloadProgressProvider = { downloadProgressProvider(item.id) },
-                    chapterSwipeStartAction = chapterSwipeStartAction,
-                    chapterSwipeEndAction = chapterSwipeEndAction,
-                    onLongClick = {
-                        onChapterSelected(item, !item.selected, true)
-                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                    },
-                    onClick = {
-                        onChapterItemClick(
-                            chapterItem = item,
-                            isAnyChapterSelected = isAnyChapterSelected,
-                            onToggleSelection = { onChapterSelected(item, !item.selected, false) },
-                            onChapterClicked = onChapterClicked,
-                        )
-                    },
-                    onDownloadClick = if (onDownloadChapter != null) {
-                        { onDownloadChapter(listOf(item), it) }
-                    } else {
-                        null
-                    },
-                    onChapterSwipe = {
-                        onChapterSwipe(item, it)
-                    },
-                )
-            }
-        }
-    }
+    // Custom: the text list was removed, volumes are always shown as the shared cover grid
+    sharedChapterGridItems(
+        coverConfig = coverConfig,
+        manga = manga,
+        chapters = chapters,
+        thumbnailBaseUrl = thumbnailBaseUrl,
+        thumbnailRefreshedAt = thumbnailRefreshedAt,
+        isAnyChapterSelected = isAnyChapterSelected,
+        onChapterClicked = onChapterClicked,
+        onChapterSelected = onChapterSelected,
+    )
 }
 
 // Custom: chapter list view modes (list / grid / grid only)
@@ -909,36 +821,27 @@ private fun MangaTwoPanelBox(
 }
 
 @Composable
-private fun rememberChapterCoverGridConfig(gridOnly: Boolean): ChapterCoverGridConfig? {
-    val mode by CoverGridSettings.chapter.aspectMode.collectAsState()
-    val spacing by CoverGridSettings.chapter.spacing.collectAsState()
-    val rowHeight by CoverGridSettings.chapter.rowHeight.collectAsState()
-    val savedColumns by CoverGridSettings.chapter.columns.collectAsState()
-    val nameMode by CoverGridSettings.chapter.nameMode.collectAsState()
+private fun rememberChapterCoverGridConfig(profile: CoverGridProfile, hasThumbnails: Boolean): ChapterCoverGridConfig {
+    val mode by profile.aspectMode.collectAsState()
+    val spacing by profile.spacing.collectAsState()
+    val rowHeight by profile.rowHeight.collectAsState()
+    val savedColumns by profile.columns.collectAsState()
+    val nameMode by profile.nameMode.collectAsState()
     val width = LocalConfiguration.current.screenWidthDp
-    if (!gridOnly) return null
     return ChapterCoverGridConfig(
-        mode = mode,
+        // Same as the NAS browser: square tiles when no volume has a thumbnail
+        mode = if (hasThumbnails) mode else CoverGridSettings.MODE_SQUARE,
         columns = CoverGridSettings.columnsOrDefault(savedColumns, width.toFloat()),
         spacing = spacing.dp,
         rowHeight = rowHeight.dp,
         contentWidth = width.dp,
         nameMode = nameMode,
+        hasThumbnails = hasThumbnails,
     )
 }
 
-private fun Modifier.chapterGridPinch(config: ChapterCoverGridConfig?): Modifier {
-    if (config == null) return this
-    return pinchSteps(config) { bigger ->
-        if (config.mode == CoverGridSettings.MODE_JUSTIFIED) {
-            CoverGridSettings.chapter.setRowHeight(CoverGridSettings.stepRowHeight(CoverGridSettings.chapter.rowHeight.value, bigger))
-        } else {
-            CoverGridSettings.chapter.setColumns(CoverGridSettings.stepColumns(config.columns, bigger))
-        }
-    }
-}
-
-private const val CHAPTER_GRID_COLUMNS = 3
+private fun Modifier.chapterGridPinch(profile: CoverGridProfile, config: ChapterCoverGridConfig): Modifier =
+    coverGridPinch(profile, config.columns, config.mode)
 
 // Custom: chapters (volumes) as rows of cover tiles inside the existing LazyColumn
 data class ChapterCoverGridConfig(
@@ -948,11 +851,11 @@ data class ChapterCoverGridConfig(
     val rowHeight: Dp,
     val contentWidth: Dp,
     val nameMode: Int,
+    val hasThumbnails: Boolean = true,
 )
 
 private fun LazyListScope.sharedChapterGridItems(
-    columns: Int,
-    coverConfig: ChapterCoverGridConfig?,
+    coverConfig: ChapterCoverGridConfig,
     manga: Manga,
     chapters: List<ChapterList>,
     thumbnailBaseUrl: String?,
@@ -973,45 +876,25 @@ private fun LazyListScope.sharedChapterGridItems(
             onChapterSelected = onChapterSelected,
             boxAspect = boxAspect,
             crop = crop,
-            showTitle = coverConfig?.nameMode != CoverGridSettings.NAME_HIDE,
+            // Like the NAS browser: tiles without a thumbnail always show their name
+            showTitle = !coverConfig.hasThumbnails || coverConfig.nameMode != CoverGridSettings.NAME_HIDE,
             modifier = modifier,
         )
     }
-    if (coverConfig != null) {
-        coverGridItems(
-            items = chapterItems,
-            key = { it.id },
-            aspectOf = { item ->
-                chapterThumbnailUrl(item.chapter.url, thumbnailBaseUrl)?.let { CoverAspectCache.ratios[it] }
-            },
-            mode = coverConfig.mode,
-            columns = coverConfig.columns,
-            spacing = coverConfig.spacing,
-            rowHeight = coverConfig.rowHeight,
-            contentWidth = coverConfig.contentWidth,
-            horizontalPadding = 12.dp,
-            tile = tile,
-        )
-        return
-    }
-    val rows = chapterItems.chunked(columns)
-    items(
-        items = rows,
-        key = { row -> "chapter-grid-${row.first().id}" },
-        contentType = { "chapter_grid_row" },
-    ) { row ->
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 2.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            row.forEach { item -> tile(item, Modifier.weight(1f), CoverGridSettings.RATIO_2_3, true) }
-            repeat(columns - row.size) {
-                Spacer(modifier = Modifier.weight(1f))
-            }
-        }
-    }
+    coverGridItems(
+        items = chapterItems,
+        key = { it.id },
+        aspectOf = { item ->
+            chapterThumbnailUrl(item.chapter.url, thumbnailBaseUrl)?.let { CoverAspectCache.ratios[it] }
+        },
+        mode = coverConfig.mode,
+        columns = coverConfig.columns,
+        spacing = coverConfig.spacing,
+        rowHeight = coverConfig.rowHeight,
+        contentWidth = coverConfig.contentWidth,
+        horizontalPadding = 8.dp,
+        tile = tile,
+    )
 }
 
 @Composable

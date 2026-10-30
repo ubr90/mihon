@@ -96,11 +96,11 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import logcat.LogPriority
 import mihon.domain.manga.model.toDomainManga
-import mihon.feature.grid.CoverGridOptionsDialog
+import mihon.feature.grid.CoverGridActions
 import mihon.feature.grid.CoverGridProfile
 import mihon.feature.grid.CoverGridSettings
 import mihon.feature.grid.coverGridItems
-import mihon.feature.grid.pinchSteps
+import mihon.feature.grid.coverGridPinch
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
 import mihon.icons.materialsymbols.rounded.Add
@@ -711,7 +711,12 @@ data object AlbumTab : eu.kanade.presentation.util.Tab {
         LaunchedEffect(Unit) {
             viewModel.events.collect { event ->
                 when (event) {
-                    is AlbumEvent.OpenManga -> navigator.push(MangaScreen(event.mangaId))
+                    is AlbumEvent.OpenManga -> navigator.push(
+                        MangaScreen(
+                            event.mangaId,
+                            gridProfileId = viewModel.state.value.open?.let { CoverGridSettings.albumProfile(it.id).id },
+                        ),
+                    )
                     is AlbumEvent.Message -> Toast.makeText(context, event.text, Toast.LENGTH_SHORT).show()
                 }
             }
@@ -1094,9 +1099,7 @@ private fun AlbumScreen(
     val nameMode by profile.nameMode.collectAsState()
 
     var searchOpen by remember { mutableStateOf(false) }
-    var sortMenu by remember { mutableStateOf(false) }
     var filterDialog by remember { mutableStateOf(false) }
-    var gridOptions by remember { mutableStateOf(false) }
 
     val works = remember(state.works, state.query, state.selectedTags, state.selectedSeries, state.sort, state.ascending, state.seed) {
         albumWorks(state)
@@ -1127,17 +1130,22 @@ private fun AlbumScreen(
                         }
                     },
                     actions = {
+                        CoverGridActions(profile = profile)
                         IconButton(onClick = {
                             searchOpen = !searchOpen
                             if (!searchOpen) viewModel.setQuery("")
                         }) {
                             Icon(MaterialSymbols.Rounded.Search, contentDescription = "검색")
                         }
+                        IconButton(onClick = { filterDialog = true }) {
+                            Icon(MaterialSymbols.Rounded.FilterList, contentDescription = "필터")
+                        }
                         Box {
-                            IconButton(onClick = { sortMenu = true }) {
-                                Icon(MaterialSymbols.Rounded.SortByAlpha, contentDescription = "정렬")
+                            var more by remember { mutableStateOf(false) }
+                            IconButton(onClick = { more = true }) {
+                                Icon(MaterialSymbols.Rounded.MoreVert, contentDescription = null)
                             }
-                            DropdownMenu(expanded = sortMenu, onDismissRequest = { sortMenu = false }) {
+                            DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
                                 listOf(
                                     AlbumPrefs.SORT_NAME to "이름순",
                                     AlbumPrefs.SORT_LATEST to "최신순",
@@ -1145,20 +1153,20 @@ private fun AlbumScreen(
                                 ).forEach { (sort, label) ->
                                     DropdownMenuItem(
                                         text = { Text(if (state.sort == sort) "✓ $label" else label) },
+                                        leadingIcon = { Icon(MaterialSymbols.Rounded.SortByAlpha, contentDescription = null) },
                                         onClick = {
                                             viewModel.setSort(sort)
-                                            sortMenu = false
+                                            more = false
                                         },
                                     )
                                 }
-                                HorizontalDivider()
                                 if (state.sort == AlbumPrefs.SORT_RANDOM) {
                                     DropdownMenuItem(
                                         text = { Text("다시 섞기") },
                                         leadingIcon = { Icon(MaterialSymbols.Rounded.Autorenew, contentDescription = null) },
                                         onClick = {
                                             viewModel.reshuffle()
-                                            sortMenu = false
+                                            more = false
                                         },
                                     )
                                 } else {
@@ -1173,47 +1181,7 @@ private fun AlbumScreen(
                                         onClick = { viewModel.toggleAscending() },
                                     )
                                 }
-                            }
-                        }
-                        IconButton(onClick = { filterDialog = true }) {
-                            Icon(MaterialSymbols.Rounded.FilterList, contentDescription = "필터")
-                        }
-                        Box {
-                            var more by remember { mutableStateOf(false) }
-                            IconButton(onClick = { more = true }) {
-                                Icon(MaterialSymbols.Rounded.MoreVert, contentDescription = null)
-                            }
-                            DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
-                                DropdownMenuItem(
-                                    text = { Text("그리드 설정") },
-                                    leadingIcon = { Icon(MaterialSymbols.RoundedFilled.ViewModule, contentDescription = null) },
-                                    onClick = {
-                                        more = false
-                                        gridOptions = true
-                                    },
-                                )
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            when (nameMode) {
-                                                CoverGridSettings.NAME_SHOW -> "이름: 보이기"
-                                                CoverGridSettings.NAME_HIDE -> "이름: 가리기"
-                                                else -> "이름: []만 가리기"
-                                            },
-                                        )
-                                    },
-                                    leadingIcon = {
-                                        Icon(
-                                            when (nameMode) {
-                                                CoverGridSettings.NAME_SHOW -> MaterialSymbols.RoundedFilled.Visibility
-                                                CoverGridSettings.NAME_HIDE -> MaterialSymbols.RoundedFilled.VisibilityOff
-                                                else -> MaterialSymbols.Rounded.Code
-                                            },
-                                            contentDescription = null,
-                                        )
-                                    },
-                                    onClick = { profile.cycleNameMode() },
-                                )
+                                HorizontalDivider()
                                 DropdownMenuItem(
                                     text = { Text("다시 스캔") },
                                     leadingIcon = { Icon(MaterialSymbols.Rounded.Refresh, contentDescription = null) },
@@ -1303,9 +1271,6 @@ private fun AlbumScreen(
         }
     }
 
-    if (gridOptions) {
-        CoverGridOptionsDialog(profile = profile, onDismiss = { gridOptions = false })
-    }
     if (filterDialog) {
         AlbumFilterDialog(
             state = state,
@@ -1508,13 +1473,7 @@ private fun AlbumGrid(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .pinchSteps(columns to mode) { bigger ->
-                    if (mode == CoverGridSettings.MODE_JUSTIFIED) {
-                        profile.setRowHeight(CoverGridSettings.stepRowHeight(profile.rowHeight.value, bigger))
-                    } else {
-                        profile.setColumns(CoverGridSettings.stepColumns(columns, bigger))
-                    }
-                },
+                .coverGridPinch(profile, columns, mode),
             contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
         ) {
             coverGridItems(

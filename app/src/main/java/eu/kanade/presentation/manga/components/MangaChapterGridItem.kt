@@ -62,8 +62,7 @@ fun MangaChapterGridItem(
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick,
-            )
-            .padding(4.dp),
+            ),
     ) {
         Box {
             AsyncImage(
@@ -82,8 +81,20 @@ fun MangaChapterGridItem(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(boxAspect)
-                    .clip(MaterialTheme.shapes.extraSmall),
+                    .clip(MaterialTheme.shapes.extraSmall)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
             )
+            if (selected) {
+                Icon(
+                    imageVector = MaterialSymbols.RoundedFilled.CheckCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .size(36.dp)
+                        .background(MaterialTheme.colorScheme.surface, CircleShape),
+                )
+            }
 
             if (downloaded) {
                 Icon(
@@ -110,29 +121,25 @@ fun MangaChapterGridItem(
             }
         }
 
-        // Read state bar: full when read, accent when in progress, empty otherwise
-        val barColor = when {
-            read -> MaterialTheme.colorScheme.primary
-            inProgress -> MaterialTheme.colorScheme.tertiary
-            else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)
+        // Custom: same look as the NAS/album tiles; a thin bar only while a volume is being read
+        if (inProgress) {
+            Spacer(
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.tertiary),
+            )
         }
-        Spacer(
-            modifier = Modifier
-                .padding(top = 4.dp)
-                .fillMaxWidth()
-                .height(4.dp)
-                .clip(CircleShape)
-                .background(barColor),
-        )
 
         if (showTitle) Text(
             text = title,
             style = MaterialTheme.typography.bodySmall,
             maxLines = 2,
-            minLines = 2,
             overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (read) DISABLED_ALPHA else 1f),
-            modifier = Modifier.padding(top = 4.dp),
+            modifier = Modifier.padding(top = 2.dp),
         )
         if (showTitle && readProgress != null) {
             Text(

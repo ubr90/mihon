@@ -101,10 +101,9 @@ import mihon.icons.materialsymbols.rounded.DragHandle
 import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.Settings
 import mihon.icons.materialsymbols.rounded.Storage
-import mihon.feature.grid.CoverGridOptionsDialog
 import mihon.feature.grid.CoverGridSettings
 import mihon.feature.grid.coverGridItems
-import mihon.feature.grid.pinchSteps
+import mihon.feature.grid.coverGridPinch
 import mihon.icons.materialsymbols.roundedfilled.Folder
 import mihon.icons.materialsymbols.roundedfilled.Visibility
 import mihon.icons.materialsymbols.roundedfilled.ViewModule
@@ -154,21 +153,11 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
             CoverGridSettings.nasProfileFor(state.currentPath)
         }
         val nameMode by gridProfile.nameMode.collectAsState()
-        var gridOptions by remember { mutableStateOf(false) }
-        if (gridOptions) {
-            CoverGridOptionsDialog(
-                profile = gridProfile,
-                onDismiss = { gridOptions = false },
-                lockPath = state.currentPath,
-            )
-        }
         NasBrowserContent(
             state = state,
             thumbVersion = thumbVersion,
             nameMode = nameMode,
             gridProfile = gridProfile,
-            onCycleNames = { gridProfile.cycleNameMode() },
-            onGridOptions = { gridOptions = true },
             showBack = !inTab || state.stack.size > 1,
             onBack = { if (state.stack.size > 1) viewModel.goUp() else if (!inTab) navigator.pop() },
             onRefresh = viewModel::refresh,
@@ -920,8 +909,6 @@ private fun NasBrowserContent(
     state: NasState,
     thumbVersion: Long,
     nameMode: Int,
-    onCycleNames: () -> Unit,
-    onGridOptions: () -> Unit,
     showBack: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
@@ -933,6 +920,10 @@ private fun NasBrowserContent(
     onDeleteThumb: (NasEntry) -> Unit,
     onRestoreThumb: (NasEntry) -> Unit,
 ) {
+    val seriesInfo = remember(state.entries, thumbVersion) {
+        NasRuntime.meta.seriesFor(state.entries.filter { !it.isDirectory }.map { it.path })
+    }
+    val showInfo by gridProfile.showInfo.collectAsState()
     Scaffold(
         topBar = {
             TopAppBar(
@@ -958,19 +949,11 @@ private fun NasBrowserContent(
                     }
                 },
                 actions = {
-                    IconButton(onClick = onGridOptions) {
-                        Icon(MaterialSymbols.RoundedFilled.ViewModule, contentDescription = null)
-                    }
-                    IconButton(onClick = onCycleNames) {
-                        Icon(
-                            when (nameMode) {
-                                CoverGridSettings.NAME_SHOW -> MaterialSymbols.RoundedFilled.Visibility
-                                CoverGridSettings.NAME_HIDE -> MaterialSymbols.RoundedFilled.VisibilityOff
-                                else -> MaterialSymbols.Rounded.Code
-                            },
-                            contentDescription = null,
-                        )
-                    }
+                    mihon.feature.grid.CoverGridActions(
+                        profile = gridProfile,
+                        showInfoToggle = seriesInfo != null,
+                        lockPath = state.currentPath,
+                    )
                     IconButton(onClick = onRefresh) {
                         Icon(MaterialSymbols.Rounded.Refresh, contentDescription = null)
                     }
@@ -1011,9 +994,6 @@ private fun NasBrowserContent(
                         state.entries.any { NasRuntime.thumbs.has(it.path, folder = it.isDirectory) }
                     }
                     val layoutMode = if (anyThumb) mode else CoverGridSettings.MODE_SQUARE
-                    val seriesInfo = remember(state.entries, thumbVersion) {
-                        NasRuntime.meta.seriesFor(state.entries.filter { !it.isDirectory }.map { it.path })
-                    }
                     // Custom: each folder keeps its own scroll position while the app is running
                     val scrollKey = state.entriesPath ?: state.currentPath ?: ""
                     val listState = androidx.compose.runtime.key(scrollKey) {
@@ -1029,18 +1009,10 @@ private fun NasBrowserContent(
                         state = listState,
                         modifier = Modifier
                             .fillMaxSize()
-                            .pinchSteps(columns to layoutMode) { bigger ->
-                                if (layoutMode == CoverGridSettings.MODE_JUSTIFIED) {
-                                    gridProfile.setRowHeight(
-                                        CoverGridSettings.stepRowHeight(gridProfile.rowHeight.value, bigger),
-                                    )
-                                } else {
-                                    gridProfile.setColumns(CoverGridSettings.stepColumns(columns, bigger))
-                                }
-                            },
+                            .coverGridPinch(gridProfile, columns, layoutMode),
                         contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp),
                     ) {
-                        if (seriesInfo != null) {
+                        if (seriesInfo != null && showInfo) {
                             item(key = "nas-series-info") { NasSeriesInfo(seriesInfo) }
                         }
                         coverGridItems(
