@@ -91,7 +91,68 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
 
         override fun onPageScrollStateChanged(state: Int) {
             isIdle = state == ViewPager.SCROLL_STATE_IDLE
+            scrollState = state
+            applyGapless()
         }
+
+        override fun onPageScrolled(position: Int, positionOffset: Float, positionOffsetPixels: Int) {
+            applyGapless()
+        }
+    }
+
+    private var scrollState = ViewPager.SCROLL_STATE_IDLE
+
+    // ---- Custom: two pages side by side while the screen is landscape ----
+
+    fun dualEnabled(): Boolean =
+        config.dualLandscape &&
+            this !is VerticalPagerViewer &&
+            activity.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    /** Called by a page holder when a page of its pair is wide/animated and must be shown alone. */
+    fun onDualSingle(pages: List<ReaderPage>, keep: ReaderPage) {
+        pages.forEach { adapter.markSingle(it, keep) }
+    }
+
+    // ---- Custom: neighbour pages stick to the current one while swiping ----
+
+    private var gaplessDirty = false
+
+    private fun applyGapless() {
+        val children = pager.children.toList()
+        val enabled = config.gapless && this !is VerticalPagerViewer
+        if (!enabled || scrollState == ViewPager.SCROLL_STATE_IDLE) {
+            if (gaplessDirty) {
+                children.forEach { it.translationX = 0f }
+                gaplessDirty = false
+            }
+            return
+        }
+        val width = pager.width - pager.paddingLeft - pager.paddingRight
+        if (width <= 0) return
+        val placed = children.map { view ->
+            val position = (view.left - pager.scrollX - pager.paddingLeft).toFloat() / width
+            val margins = (view as? eu.kanade.tachiyomi.ui.reader.viewer.ReaderPageImageView)?.horizontalMargins()
+                ?: (0f to 0f)
+            Triple(view, position, margins)
+        }
+        placed.forEach { (view, position, margins) ->
+            if (kotlin.math.abs(position) < 0.001f) {
+                view.translationX = 0f
+                return@forEach
+            }
+            val toward = if (position > 0) position - 1f else position + 1f
+            val neighbour = placed.minByOrNull { kotlin.math.abs(it.second - toward) }
+                ?.takeIf { kotlin.math.abs(it.second - toward) < 0.5f }
+            val neighbourMargins = neighbour?.third ?: (0f to 0f)
+            val gap = if (position > 0) {
+                neighbourMargins.second + margins.first
+            } else {
+                margins.second + neighbourMargins.first
+            }
+            view.translationX = -position * gap
+        }
+        gaplessDirty = true
     }
 
     init {
@@ -138,6 +199,15 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
 
         config.imagePropertyChangedListener = {
             refreshAdapter()
+        }
+
+        config.gaplessChangedListener = { applyGapless() }
+
+        config.dualLandscapeChangedListener = {
+            if (adapter.isDual != dualEnabled()) {
+                val current = adapter.items.getOrNull(pager.currentItem) as? ReaderPage
+                adapter.rebuildDual(current)
+            }
         }
 
         config.navigationModeChangedListener = {
@@ -227,6 +297,8 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
         val pages = page.chapter.pages ?: return
         logcat { "onReaderPageSelected: ${page.number}/${pages.size}" }
         activity.onPageSelected(page)
+        // Custom: when the pair ends the chapter, report its second page so the chapter is marked read
+        adapter.partnerOf(page)?.takeIf { it === pages.lastOrNull() }?.let { activity.onPageSelected(it) }
 
         // Notify holder of page change
         getPageHolder(page)?.onPageSelected(forward)
@@ -281,6 +353,11 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
 
         val forceTransition = config.alwaysShowChapterTransition ||
             adapter.items.getOrNull(pager.currentItem) is ChapterTransition
+        if (pager.isGone) {
+            chapters.currChapter.pages?.let { pages ->
+                adapter.dualAnchor = pages.getOrNull(min(chapters.currChapter.requestedPage, pages.lastIndex))
+            }
+        }
         adapter.setChapters(chapters, forceTransition)
 
         // Layout the pager once a chapter is being set
@@ -300,7 +377,7 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
      * Tells this viewer to move to the given [page].
      */
     override fun moveToPage(page: ReaderPage) {
-        val position = adapter.items.indexOf(page)
+        val position = adapter.itemFor(page)?.let { adapter.items.indexOf(it) } ?: -1
         if (position != -1) {
             val currentPosition = pager.currentItem
             pager.setCurrentItem(position, true)

@@ -255,6 +255,8 @@ data class NasState(
     val selection: NasSelection? = null,
     val confirm: NasConfirm? = null,
     val progress: NasProgress? = null,
+    /** Folder the current [entries] belong to (the scroll position is remembered per folder). */
+    val entriesPath: String? = null,
 ) {
     val currentPath: String? get() = stack.lastOrNull()
 }
@@ -375,7 +377,7 @@ class NasBrowserViewModel(
                 if (_state.value.currentPath != path) return@launch
                 // A folder holding archives is matched without its "[memo]"
                 if (visible.any { !it.isDirectory }) thumbs.markLeaf(path)
-                _state.update { it.copy(entries = visible, loading = false) }
+                _state.update { it.copy(entries = visible, loading = false, entriesPath = path) }
                 if (restoreFromBackup) restoreVisible(path, visible)
 
                 // Thumbnail image inside the current folder counts for this folder
@@ -1012,7 +1014,19 @@ private fun NasBrowserContent(
                     val seriesInfo = remember(state.entries, thumbVersion) {
                         NasRuntime.meta.seriesFor(state.entries.filter { !it.isDirectory }.map { it.path })
                     }
+                    // Custom: each folder keeps its own scroll position while the app is running
+                    val scrollKey = state.entriesPath ?: state.currentPath ?: ""
+                    val listState = androidx.compose.runtime.key(scrollKey) {
+                        val saved = NasRuntime.scrollPositions[scrollKey]
+                        androidx.compose.foundation.lazy.rememberLazyListState(saved?.first ?: 0, saved?.second ?: 0)
+                    }
+                    LaunchedEffect(listState, scrollKey) {
+                        androidx.compose.runtime.snapshotFlow {
+                            listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset
+                        }.collect { NasRuntime.scrollPositions[scrollKey] = it }
+                    }
                     LazyColumn(
+                        state = listState,
                         modifier = Modifier
                             .fillMaxSize()
                             .pinchSteps(columns to layoutMode) { bigger ->

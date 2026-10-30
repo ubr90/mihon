@@ -182,6 +182,28 @@ open class ReaderPageImageView @JvmOverloads constructor(
     }
 
     /**
+     * Custom: empty space at the left and right of the displayed image, in view pixels.
+     * Used to make neighbour pages stick to this one while swiping.
+     */
+    fun horizontalMargins(): Pair<Float, Float> {
+        when (val view = pageView) {
+            is SubsamplingScaleImageView -> {
+                if (!view.isReady || view.sWidth <= 0) return 0f to 0f
+                val tl = view.sourceToViewCoord(0f, 0f) ?: return 0f to 0f
+                val br = view.sourceToViewCoord(view.sWidth.toFloat(), view.sHeight.toFloat()) ?: return 0f to 0f
+                val left = minOf(tl.x, br.x)
+                val right = maxOf(tl.x, br.x)
+                return left.coerceAtLeast(0f) to (view.width - right).coerceAtLeast(0f)
+            }
+            is PhotoView -> {
+                val rect = view.displayRect ?: return 0f to 0f
+                return rect.left.coerceAtLeast(0f) to (view.width - rect.right).coerceAtLeast(0f)
+            }
+        }
+        return 0f to 0f
+    }
+
+    /**
      * Check if the image can be panned to the left
      */
     fun canPanLeft(): Boolean = canPan { it.left }

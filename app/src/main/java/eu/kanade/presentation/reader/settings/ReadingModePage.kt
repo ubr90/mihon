@@ -116,6 +116,16 @@ private fun ColumnScope.PagerViewerSettings(viewModel: ReaderSettingsViewModel) 
         pref = viewModel.preferences.navigateToPan,
     )
 
+    CheckboxItem(
+        label = "넘길 때 페이지 붙이기 (여백 없이)",
+        pref = viewModel.preferences.pagerGapless,
+    )
+
+    CheckboxItem(
+        label = "가로 화면에서 두 장 보기",
+        pref = viewModel.preferences.pagerDualLandscape,
+    )
+
     val dualPageSplitPaged by viewModel.preferences.dualPageSplitPaged.collectAsState()
     CheckboxItem(
         label = stringResource(MR.strings.pref_dual_page_split),

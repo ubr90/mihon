@@ -67,6 +67,7 @@ object CoverGridSettings {
     /** Separate look for the NAS browser and the Komga "grid only" chapter view. */
     val nas by lazy { CoverGridProfile("nas", prefs) }
     val chapter by lazy { CoverGridProfile("chapter", prefs) }
+    val album by lazy { CoverGridProfile("album", prefs) }
 
     /** NAS folders that keep their own grid settings (only that folder, not its sub folders). */
     private val lockedDirs by lazy {
@@ -242,6 +243,7 @@ fun <T> LazyListScope.coverGridItems(
     rowHeight: Dp,
     contentWidth: Dp,
     horizontalPadding: Dp,
+    groupKey: String = "",
     tile: CoverTile<T>,
 ) {
     val rowModifier = Modifier
@@ -259,7 +261,7 @@ fun <T> LazyListScope.coverGridItems(
     when (mode) {
         CoverGridSettings.MODE_AUTO -> {
             // Masonry: each tile goes to the currently shortest column (not lazy, fine for folders/volumes)
-            item(key = "cover-grid-masonry") {
+            item(key = "cover-grid-masonry$groupKey") {
                 val cols = List(columns) { mutableListOf<T>() }
                 val heights = FloatArray(columns)
                 items.forEach { item ->

@@ -33,6 +33,121 @@ class PagerViewerAdapter(private val viewer: PagerViewer) : ViewPagerAdapter() {
 
     var currentChapter: ReaderChapter? = null
 
+    // ---- Custom: two pages side by side (landscape) ----
+
+    /** Items in reading order before pairing, kept to re-pair when a wide page is found. */
+    private var readingOrderItems: List<Any> = emptyList()
+
+    /** First page of a pair -> second page of the pair. */
+    val partners = HashMap<ReaderPage, ReaderPage>()
+
+    /** Pages that must be shown alone (wide spreads, animated images). */
+    private val singles = HashSet<ReaderPage>()
+
+    /** Page the pairs are aligned to: the page being viewed when the screen was rotated. */
+    var dualAnchor: ReaderPage? = null
+
+    /** Whether the items are currently paired. */
+    var isDual = false
+        private set
+
+    fun partnerOf(page: ReaderPage): ReaderPage? = if (isDual) partners[page] else null
+
+    /** Returns the item that shows [page], which is the page itself or the first page of its pair. */
+    fun itemFor(page: ReaderPage): Any? {
+        if (items.contains(page)) return page
+        return partners.entries.firstOrNull { it.value === page }?.key
+    }
+
+    private fun pairUp(list: List<Any>): List<Any> {
+        partners.clear()
+        val out = mutableListOf<Any>()
+        var i = 0
+        while (i < list.size) {
+            val item = list[i]
+            if (item !is ReaderPage || item is InsertPage) {
+                out.add(item)
+                i++
+                continue
+            }
+            // A run of pages of the same chapter
+            var j = i
+            while (j < list.size) {
+                val next = list[j]
+                if (next !is ReaderPage || next is InsertPage || next.chapter !== item.chapter) break
+                j++
+            }
+            @Suppress("UNCHECKED_CAST")
+            val run = list.subList(i, j) as List<ReaderPage>
+            out.addAll(pairRun(run))
+            i = j
+        }
+        return out
+    }
+
+    private fun pairRun(run: List<ReaderPage>): List<ReaderPage> {
+        val anchor = run.indexOfFirst { it === dualAnchor }.coerceAtLeast(0)
+        val after = mutableListOf<ReaderPage>()
+        var k = anchor
+        while (k < run.size) {
+            val a = run[k]
+            val b = run.getOrNull(k + 1)
+            if (b != null && a !in singles && b !in singles) {
+                partners[a] = b
+                after.add(a)
+                k += 2
+            } else {
+                after.add(a)
+                k += 1
+            }
+        }
+        val before = mutableListOf<ReaderPage>()
+        k = anchor - 1
+        while (k >= 0) {
+            val b = run[k]
+            val a = run.getOrNull(k - 1)
+            if (a != null && a !in singles && b !in singles) {
+                partners[a] = b
+                before.add(0, a)
+                k -= 2
+            } else {
+                before.add(0, b)
+                k -= 1
+            }
+        }
+        return before + after
+    }
+
+    private fun applyItems(readingOrder: List<Any>) {
+        readingOrderItems = readingOrder
+        isDual = viewer.dualEnabled()
+        val newItems = if (isDual) pairUp(readingOrder).toMutableList() else readingOrder.toMutableList()
+        if (!isDual) partners.clear()
+        if (viewer is R2LPagerViewer) {
+            newItems.reverse()
+        }
+        items = newItems
+    }
+
+    /** Re-pairs pages, keeping the pair that shows [keep] on screen. */
+    fun rebuildDual(keep: ReaderPage?) {
+        if (readingOrderItems.isEmpty()) return
+        if (keep != null) dualAnchor = keep
+        applyItems(readingOrderItems)
+        notifyDataSetChanged()
+        val target = keep?.let { itemFor(it) }
+        val position = target?.let { items.indexOf(it) } ?: -1
+        if (position != -1 && position != viewer.pager.currentItem) {
+            viewer.pager.setCurrentItem(position, false)
+        }
+    }
+
+    /** A wide (or animated) page was found inside a pair: show it alone from now on. */
+    fun markSingle(page: ReaderPage, keep: ReaderPage?) {
+        if (!singles.add(page)) return
+        rebuildDual(keep)
+    }
+
     /**
      * Context that has been wrapped to use the correct theme values based on the
      * current app theme and reader background color
@@ -103,19 +218,16 @@ class PagerViewerAdapter(private val viewer: PagerViewer) : ViewPagerAdapter() {
         // Resets double-page splits, else insert pages get misplaced
         items.filterIsInstance<InsertPage>().also { items.removeAll(it) }
 
-        if (viewer is R2LPagerViewer) {
-            newItems.reverse()
-        }
-
         val adjacentChapterIds = setOfNotNull(chapters.prevChapter?.chapter?.id, chapters.nextChapter?.chapter?.id)
         preprocessed = preprocessed.filter { it.chapter.chapter.id in adjacentChapterIds }
-        items = newItems
+        applyItems(newItems)
         notifyDataSetChanged()
 
         // The pager only follows the pages it has created, so before its first layout it would stay at the same
         // position while pages are added in front, e.g. the next chapter's in right to left, and land in another
         // chapter
-        val currentPosition = items.indexOf(currentItem)
+        val currentPosition = (currentItem as? ReaderPage)?.let { itemFor(it) }?.let { items.indexOf(it) }
+            ?: items.indexOf(currentItem)
         if (currentPosition != -1 && currentPosition != viewer.pager.currentItem) {
             viewer.pager.setCurrentItem(currentPosition, false)
         }
@@ -138,7 +250,7 @@ class PagerViewerAdapter(private val viewer: PagerViewer) : ViewPagerAdapter() {
      */
     override fun createView(container: ViewGroup, position: Int): View {
         return when (val item = items[position]) {
-            is ReaderPage -> PagerPageHolder(readerThemedContext, viewer, item)
+            is ReaderPage -> PagerPageHolder(readerThemedContext, viewer, item, partnerOf(item))
             is ChapterTransition -> PagerTransitionHolder(readerThemedContext, viewer, item)
             else -> throw NotImplementedError("Holder for ${item.javaClass} not implemented")
         }
@@ -148,6 +260,9 @@ class PagerViewerAdapter(private val viewer: PagerViewer) : ViewPagerAdapter() {
      * Returns the current position of the given [view] on the adapter.
      */
     override fun getItemPosition(view: Any): Int {
+        if (view is PagerPageHolder && view.partner !== partnerOf(view.page)) {
+            return POSITION_NONE
+        }
         if (view is PositionableView) {
             val position = items.indexOf(view.item)
             if (position != -1) {

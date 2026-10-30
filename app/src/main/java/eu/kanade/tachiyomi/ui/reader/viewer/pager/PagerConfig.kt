@@ -46,6 +46,18 @@ class PagerConfig(
     var landscapeZoom = false
         private set
 
+    // Custom: neighbour pages stick to the current one while swiping
+    var gapless = true
+        private set
+
+    // Custom: two pages side by side in landscape
+    var dualLandscape = true
+        private set
+
+    var gaplessChangedListener: (() -> Unit)? = null
+
+    var dualLandscapeChangedListener: (() -> Unit)? = null
+
     init {
         readerPreferences.readerTheme
             .register(
@@ -70,6 +82,12 @@ class PagerConfig(
 
         readerPreferences.landscapeZoom
             .register({ landscapeZoom = it }, { imagePropertyChangedListener?.invoke() })
+
+        readerPreferences.pagerGapless
+            .register({ gapless = it }, { gaplessChangedListener?.invoke() })
+
+        readerPreferences.pagerDualLandscape
+            .register({ dualLandscape = it }, { dualLandscapeChangedListener?.invoke() })
 
         readerPreferences.navigationModePager
             .register({ navigationMode = it }, { updateNavigation(navigationMode) })

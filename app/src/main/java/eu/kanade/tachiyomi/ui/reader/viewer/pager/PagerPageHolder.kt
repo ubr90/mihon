@@ -17,6 +17,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
@@ -36,6 +37,8 @@ class PagerPageHolder(
     readerThemedContext: Context,
     val viewer: PagerViewer,
     val page: ReaderPage,
+    /** Custom: second page shown next to [page] (two pages side by side), or null. */
+    val partner: ReaderPage? = null,
 ) : ReaderPageImageView(readerThemedContext), ViewPagerAdapter.PositionableView {
 
     /**
@@ -91,12 +94,30 @@ class PagerPageHolder(
      */
     private suspend fun loadPageAndProcessStatus() {
         val loader = page.chapter.pageLoader ?: return
+        val second = partner
 
         supervisorScope {
             launch(Dispatchers.IO) {
                 loader.loadPage(page)
             }
-            page.statusFlow.collectLatest { state ->
+            if (second != null) {
+                launch(Dispatchers.IO) {
+                    second.chapter.pageLoader?.loadPage(second)
+                }
+            }
+            val statusFlow = if (second == null) {
+                page.statusFlow
+            } else {
+                combine(page.statusFlow, second.statusFlow) { a, b ->
+                    when {
+                        a is Page.State.Error -> a
+                        b is Page.State.Error -> b
+                        a == Page.State.Ready -> b
+                        else -> a
+                    }
+                }
+            }
+            statusFlow.collectLatest { state ->
                 when (state) {
                     Page.State.Queue -> setQueued()
                     Page.State.LoadPage -> setLoading()
@@ -147,12 +168,37 @@ class PagerPageHolder(
         progressIndicator?.setProgress(0)
 
         val streamFn = page.stream ?: return
+        val second = partner
+        val secondFn = second?.stream
+        if (second != null && secondFn == null) return
 
         try {
             val buffer = withContext(Dispatchers.IO) { streamFn().use { Buffer().readFrom(it) } }
+            val buffer2 = if (secondFn != null) {
+                withContext(Dispatchers.IO) { secondFn().use { Buffer().readFrom(it) } }
+            } else {
+                null
+            }
+            // Custom: a wide or animated page can't be paired, show it alone
+            if (second != null && buffer2 != null) {
+                val bad = withContext(Dispatchers.Default) {
+                    listOfNotNull(
+                        page.takeIf { ImageUtil.isWideImage(buffer.peek()) || ImageUtil.isAnimatedAndSupported(buffer.peek()) },
+                        second.takeIf { ImageUtil.isWideImage(buffer2.peek()) || ImageUtil.isAnimatedAndSupported(buffer2.peek()) },
+                    )
+                }
+                if (bad.isNotEmpty()) {
+                    withContext(Dispatchers.Main) { viewer.onDualSingle(bad, page) }
+                    return
+                }
+            }
             // Splitting, merging and sampling the background decode the image, which is CPU work
             val (source, isAnimated, background) = withContext(Dispatchers.Default) {
-                val source = process(item, buffer)
+                val source = if (buffer2 != null) {
+                    mergeSideBySide(buffer, buffer2, firstOnRight = viewer !is L2RPagerViewer)
+                } else {
+                    process(item, buffer)
+                }
                 val isAnimated = ImageUtil.isAnimatedAndSupported(source)
                 val background = if (!isAnimated && viewer.config.automaticBackground) {
                     ImageUtil.chooseBackground(context, source.peek().inputStream())
@@ -186,7 +232,34 @@ class PagerPageHolder(
         }
     }
 
+    /** Custom: draws two pages next to each other at the same height. */
+    private fun mergeSideBySide(first: BufferedSource, second: BufferedSource, firstOnRight: Boolean): BufferedSource {
+        val a = android.graphics.BitmapFactory.decodeStream(first.inputStream())
+        val b = android.graphics.BitmapFactory.decodeStream(second.inputStream())
+        val height = maxOf(a.height, b.height)
+        val wa = a.width * height / a.height
+        val wb = b.width * height / b.height
+        val result = android.graphics.Bitmap.createBitmap(wa + wb, height, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(result)
+        canvas.drawColor(android.graphics.Color.WHITE)
+        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        val (left, right) = if (firstOnRight) b to a else a to b
+        val wl = if (firstOnRight) wb else wa
+        val wr = if (firstOnRight) wa else wb
+        canvas.drawBitmap(left, null, android.graphics.Rect(0, 0, wl, height), paint)
+        canvas.drawBitmap(right, null, android.graphics.Rect(wl, 0, wl + wr, height), paint)
+        a.recycle()
+        b.recycle()
+        val output = Buffer()
+        result.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, output.outputStream())
+        result.recycle()
+        return output
+    }
+
     private fun process(page: ReaderPage, imageSource: BufferedSource): BufferedSource {
+        if (viewer.dualEnabled()) {
+            return imageSource
+        }
         if (viewer.config.dualPageRotateToFit) {
             return rotateDualPage(imageSource)
         }
@@ -278,6 +351,7 @@ class PagerPageHolder(
             errorLayout?.actionRetry?.viewer = viewer
             errorLayout?.actionRetry?.setOnClickListener {
                 page.chapter.pageLoader?.retryPage(page)
+                partner?.let { it.chapter.pageLoader?.retryPage(it) }
             }
         }
 

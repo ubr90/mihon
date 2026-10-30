@@ -67,6 +67,8 @@ object HomeScreen : Screen() {
 
     private val TABS = listOf(
         mihon.feature.nas.NasTab,
+        // Custom: album tab (works under one folder as a grid)
+        mihon.feature.nas.AlbumTab,
         // Custom: favorites tab; updates and browse moved into "More"
         mihon.feature.nas.FavoritesTab,
         LibraryTab,

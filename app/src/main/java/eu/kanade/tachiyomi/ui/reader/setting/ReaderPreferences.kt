@@ -96,6 +96,12 @@ class ReaderPreferences(
 
     val landscapeZoom: Preference<Boolean> = preferenceStore.getBoolean("landscape_zoom", true)
 
+    // Custom: while swiping, the next page sticks to the current page's edge (no black gap)
+    val pagerGapless: Preference<Boolean> = preferenceStore.getBoolean("pager_gapless", true)
+
+    // Custom: two pages side by side while the screen is landscape
+    val pagerDualLandscape: Preference<Boolean> = preferenceStore.getBoolean("pager_dual_landscape", true)
+
     val cropBordersWebtoon: Preference<Boolean> = preferenceStore.getBoolean("crop_borders_webtoon", false)
 
     val webtoonSidePadding: Preference<Int> = preferenceStore.getInt("webtoon_side_padding", WEBTOON_PADDING_MIN)

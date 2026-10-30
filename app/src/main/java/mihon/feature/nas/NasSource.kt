@@ -25,7 +25,7 @@ import uy.kohesive.injekt.injectLazy
  * Custom: shared NAS objects (settings, WebDAV client, thumbnails).
  */
 object NasRuntime {
-    private val app: Application by injectLazy()
+    val app: Application by injectLazy()
     private val network: eu.kanade.tachiyomi.network.NetworkHelper by injectLazy()
 
     val settings by lazy { NasSettings(app) }
@@ -39,6 +39,9 @@ object NasRuntime {
 
     /** Folder stack the NAS tab should jump to (set by the favorites tab). */
     val pendingJump = kotlinx.coroutines.flow.MutableStateFlow<List<String>?>(null)
+
+    /** NAS tab: scroll position (first item, offset) per folder, kept while the app is running. */
+    val scrollPositions = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
 
     /**
      * Saves an archive thumbnail (if it has none yet) and uses it for the folder when the folder has none.
