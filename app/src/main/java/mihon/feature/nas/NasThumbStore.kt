@@ -66,6 +66,15 @@ class NasThumbStore(context: Context) {
      * (same rule as the PC tool). The first folder (the shared folder) is never changed.
      */
     private fun canonDir(path: String, forceLast: Boolean): String {
+        // 2026-10-30 rule: the "[memo]" of every folder is ignored (except the shared folder)
+        val segments = path.trim('/').split('/').filter { it.isNotEmpty() }
+        return segments.mapIndexed { i, segment -> if (i > 0) stripMemo(segment) else segment }
+            .joinToString("/", prefix = "/")
+            .let { if (segments.isEmpty()) "/" else it }
+    }
+
+    /** Previous rule (memo removed only from folders holding archives); used to move old metadata files. */
+    private fun legacyCanonDir(path: String, forceLast: Boolean): String {
         val segments = path.trim('/').split('/').filter { it.isNotEmpty() }
         var current = ""
         segments.forEachIndexed { i, segment ->
@@ -88,6 +97,10 @@ class NasThumbStore(context: Context) {
         !folder -> childPath(canonDir(parentPath(path), forceLast = true), fileName(path))
         else -> canonDir(path, forceLast = false)
     }
+
+    /** Archive path under the previous rule (see [legacyCanonDir]). */
+    fun legacyCanonZip(path: String): String =
+        childPath(legacyCanonDir(parentPath(path), forceLast = true), fileName(path))
 
     /** Old files were named from the exact path; rename them to the memo-free key once. */
     @Synchronized

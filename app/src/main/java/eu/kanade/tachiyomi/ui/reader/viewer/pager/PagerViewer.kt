@@ -159,6 +159,9 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
         pager.isVisible = false // Don't layout the pager yet
         pager.layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
         pager.isFocusable = false
+        // Custom: the position is restored from the chapter's page, not from the saved view state (its index
+        // differs between one and two pages per screen, which landed on the first/last page after rotating)
+        pager.isSaveEnabled = false
         pager.offscreenPageLimit = 1
         pager.id = R.id.reader_pager
         pager.adapter = adapter
@@ -297,8 +300,9 @@ abstract class PagerViewer(val activity: ReaderActivity) : Viewer {
         val pages = page.chapter.pages ?: return
         logcat { "onReaderPageSelected: ${page.number}/${pages.size}" }
         activity.onPageSelected(page)
-        // Custom: when the pair ends the chapter, report its second page so the chapter is marked read
-        adapter.partnerOf(page)?.takeIf { it === pages.lastOrNull() }?.let { activity.onPageSelected(it) }
+        // Custom: a pair reports its second page too, so turning back to portrait shows that page
+        // (e.g. [101 | 100] -> 101) and the chapter is marked read when the pair ends it
+        adapter.partnerOf(page)?.let { activity.onPageSelected(it) }
 
         // Notify holder of page change
         getPageHolder(page)?.onPageSelected(forward)

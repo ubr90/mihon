@@ -43,6 +43,9 @@ object NasRuntime {
     /** NAS tab: scroll position (first item, offset) per folder, kept while the app is running. */
     val scrollPositions = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
 
+    /** Album tab: an album is open (back goes to the album list). */
+    val albumOpen = kotlinx.coroutines.flow.MutableStateFlow(false)
+
     /**
      * Saves an archive thumbnail (if it has none yet) and uses it for the folder when the folder has none.
      */

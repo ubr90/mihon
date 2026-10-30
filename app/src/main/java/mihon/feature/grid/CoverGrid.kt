@@ -67,7 +67,11 @@ object CoverGridSettings {
     /** Separate look for the NAS browser and the Komga "grid only" chapter view. */
     val nas by lazy { CoverGridProfile("nas", prefs) }
     val chapter by lazy { CoverGridProfile("chapter", prefs) }
-    val album by lazy { CoverGridProfile("album", prefs) }
+    private val albumProfiles = HashMap<String, CoverGridProfile>()
+
+    /** Each album keeps its own grid look. */
+    fun albumProfile(id: String): CoverGridProfile =
+        synchronized(albumProfiles) { albumProfiles.getOrPut(id) { CoverGridProfile("album_$id", prefs) } }
 
     /** NAS folders that keep their own grid settings (only that folder, not its sub folders). */
     private val lockedDirs by lazy {

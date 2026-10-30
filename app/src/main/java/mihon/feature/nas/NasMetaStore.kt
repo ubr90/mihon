@@ -66,7 +66,7 @@ class NasMetaStore(context: Context) {
     fun migrate(zipPaths: List<String>) {
         zipPaths.forEach { path ->
             val new = file(path)
-            listOf(rawFile(path), rawFile(NasThumbStore.oldCanonZipPath(path))).distinct().forEach { old ->
+            listOf(rawFile(path), rawFile(NasThumbStore.oldCanonZipPath(path)), rawFile(NasRuntime.thumbs.legacyCanonZip(path))).distinct().forEach { old ->
                 if (old != new && old.exists()) {
                     if (new.exists()) old.delete() else old.renameTo(new)
                 }

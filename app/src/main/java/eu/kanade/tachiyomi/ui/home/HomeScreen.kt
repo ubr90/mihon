@@ -143,7 +143,8 @@ object HomeScreen : Screen() {
 
             // Custom: the tab menu hides itself while the NAS tab is open (☰ shows it again)
             LaunchedEffect(tabNavigator.current) {
-                mihon.feature.grid.NavBarToggle.autoHidden.value = tabNavigator.current is mihon.feature.nas.NasTab
+                mihon.feature.grid.NavBarToggle.autoHidden.value = tabNavigator.current is mihon.feature.nas.NasTab ||
+                    tabNavigator.current is mihon.feature.nas.AlbumTab
             }
 
             val goToLibraryTab = { tabNavigator.current = LibraryTab }
@@ -152,7 +153,9 @@ object HomeScreen : Screen() {
             // order the back handlers were registered in (it changes after returning from the reader)
             val nasDepth by mihon.feature.nas.NasRuntime.stackDepth.collectAsState()
             val nasHandlesBack = tabNavigator.current is mihon.feature.nas.NasTab && nasDepth > 1
-            BackHandler(enabled = tabNavigator.current != LibraryTab && !nasHandlesBack, onBack = goToLibraryTab)
+            val albumOpen by mihon.feature.nas.NasRuntime.albumOpen.collectAsState()
+            val albumHandlesBack = tabNavigator.current is mihon.feature.nas.AlbumTab && albumOpen
+            BackHandler(enabled = tabNavigator.current != LibraryTab && !nasHandlesBack && !albumHandlesBack, onBack = goToLibraryTab)
 
             LaunchedEffect(Unit) {
                 launch {
