@@ -94,6 +94,18 @@ class MangaScreen(
         }
 
         val successState = state as MangaViewModel.State.Success
+
+        // Custom: NAS series always open in the NAS screen (the Mihon series screen is not used for them)
+        if (successState.manga.source == mihon.feature.nas.NasSource.SOURCE_ID) {
+            val nasScreen = remember {
+                mihon.feature.nas.NasBrowserScreen(
+                    startPath = successState.manga.url,
+                    gridProfileId = gridProfileId ?: "library",
+                )
+            }
+            nasScreen.Content()
+            return
+        }
         val isHttpSource = remember { successState.source is HttpSource }
 
         LaunchedEffect(successState.manga, viewModel.source) {

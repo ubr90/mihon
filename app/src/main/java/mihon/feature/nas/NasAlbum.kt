@@ -1094,6 +1094,7 @@ private fun AlbumScreen(
     onEdit: () -> Unit,
     onOpenInNas: (AlbumWork) -> Unit,
 ) {
+    val navigator = LocalNavigator.currentOrThrow
     val thumbVersion by NasRuntime.thumbs.version.collectAsState()
     val profile = remember(album.id) { CoverGridSettings.albumProfile(album.id) }
     val nameMode by profile.nameMode.collectAsState()
@@ -1262,7 +1263,10 @@ private fun AlbumScreen(
                     works = works,
                     thumbVersion = thumbVersion,
                     nameMode = nameMode,
-                    onOpen = viewModel::open,
+                    onOpen = { work ->
+                        // Custom: a work opens in the NAS screen (same screen everywhere)
+                        navigator.push(NasBrowserScreen(startPath = work.path, gridProfileId = profile.id))
+                    },
                     onNeedThumb = { viewModel.ensureThumb(it.path, it.firstZip) },
                     onToggleLibrary = viewModel::toggleLibrary,
                     onOpenInNas = onOpenInNas,

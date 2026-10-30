@@ -118,7 +118,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * Custom: NAS (WebDAV) folder browser. Folders and zip/cbz archives are shown as tiles;
  * tapping an archive opens it in the reader.
  */
-class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
+class NasBrowserScreen(
+    private val inTab: Boolean = false,
+    // Custom: open at this folder as its own screen (library, album, history), back closes it
+    private val startPath: String? = null,
+    // Grid settings to use ("library", "album_<id>"); null = NAS settings (+ per-folder lock)
+    private val gridProfileId: String? = null,
+) : Screen() {
 
     @Composable
     override fun Content() {
@@ -126,6 +132,7 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
         val context = LocalContext.current
         val viewModel = metroViewModel<NasBrowserViewModel>()
         val state by viewModel.state.collectAsState()
+        LaunchedEffect(Unit) { viewModel.start(if (inTab) null else startPath) }
         val thumbOnlyVersion by NasRuntime.thumbs.version.collectAsState()
         val metaVersion by NasRuntime.meta.version.collectAsState()
         // Tiles reload when a thumbnail or metadata (ComicInfo) changes
@@ -150,7 +157,11 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
         // Grid settings: the folder's own when "only this folder" is locked, otherwise the shared NAS ones
         val lockedDirs by CoverGridSettings.nasLocked.collectAsState()
         val gridProfile = remember(state.currentPath, state.entries, lockedDirs) {
-            CoverGridSettings.nasProfileFor(state.currentPath)
+            if (gridProfileId != null) {
+                CoverGridSettings.profileById(gridProfileId)
+            } else {
+                CoverGridSettings.nasProfileFor(state.currentPath)
+            }
         }
         val nameMode by gridProfile.nameMode.collectAsState()
         NasBrowserContent(
@@ -158,6 +169,7 @@ class NasBrowserScreen(private val inTab: Boolean = false) : Screen() {
             thumbVersion = thumbVersion,
             nameMode = nameMode,
             gridProfile = gridProfile,
+            lockable = gridProfileId == null,
             showBack = !inTab || state.stack.size > 1,
             onBack = { if (state.stack.size > 1) viewModel.goUp() else if (!inTab) navigator.pop() },
             onRefresh = viewModel::refresh,
@@ -266,7 +278,7 @@ class NasBrowserViewModel(
     private val dav get() = NasRuntime.dav
     private val thumbs get() = NasRuntime.thumbs
 
-    private val _state = MutableStateFlow(NasState())
+    private val _state = MutableStateFlow(NasState(loading = true))
     val state: StateFlow<NasState> = _state.asStateFlow()
 
     private val eventChannel = Channel<NasEvent>(Channel.BUFFERED)
@@ -276,20 +288,25 @@ class NasBrowserViewModel(
     private val probed = mutableSetOf<String>()
     private val probeLimit = Semaphore(4)
 
-    init {
-        // Favorites tab asks to open a folder
-        viewModelScope.launch {
-            NasRuntime.pendingJump.collect { stack ->
-                if (stack != null && settings.isConfigured) {
-                    NasRuntime.pendingJump.value = null
-                    setStack(resolveRenamed(stack))
-                    _state.update { it.copy(entries = emptyList()) }
-                    reload()
-                }
-            }
-        }
+    private var started = false
+
+    /** Opened as its own screen at a fixed folder: does not touch the NAS tab's saved position. */
+    private var standalone = false
+
+    /** Called once by the screen: [startPath] = open at that folder, null = the NAS tab. */
+    fun start(startPath: String?) {
+        if (started) return
+        started = true
+        standalone = startPath != null
         when {
-            !settings.isConfigured -> showSettings(true)
+            !settings.isConfigured -> {
+                _state.update { it.copy(loading = false) }
+                showSettings(true)
+            }
+            startPath != null -> {
+                _state.update { it.copy(stack = listOf(NasSettings.normalizePath(startPath))) }
+                reload()
+            }
             else -> {
                 // Restore the folder path from the last visit (the screen can be recreated while reading)
                 val root = settings.rootPath
@@ -299,6 +316,18 @@ class NasBrowserViewModel(
                     reload()
                 } else {
                     resetToRoot()
+                }
+            }
+        }
+        if (standalone) return
+        // Favorites tab asks to open a folder
+        viewModelScope.launch {
+            NasRuntime.pendingJump.collect { stack ->
+                if (stack != null && settings.isConfigured) {
+                    NasRuntime.pendingJump.value = null
+                    setStack(resolveRenamed(stack))
+                    _state.update { it.copy(entries = emptyList()) }
+                    reload()
                 }
             }
         }
@@ -326,7 +355,7 @@ class NasBrowserViewModel(
     }
 
     private fun setStack(stack: List<String>) {
-        settings.lastStack = stack
+        if (!standalone) settings.lastStack = stack
         _state.update { it.copy(stack = stack) }
     }
 
@@ -909,6 +938,7 @@ private fun NasBrowserContent(
     state: NasState,
     thumbVersion: Long,
     nameMode: Int,
+    lockable: Boolean,
     showBack: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
@@ -952,7 +982,7 @@ private fun NasBrowserContent(
                     mihon.feature.grid.CoverGridActions(
                         profile = gridProfile,
                         showInfoToggle = seriesInfo != null,
-                        lockPath = state.currentPath,
+                        lockPath = state.currentPath.takeIf { lockable },
                     )
                     IconButton(onClick = onRefresh) {
                         Icon(MaterialSymbols.Rounded.Refresh, contentDescription = null)

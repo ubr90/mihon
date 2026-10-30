@@ -77,11 +77,18 @@ data object LibraryTab : Tab {
         }
 
     override suspend fun onReselect(navigator: Navigator) {
-        requestOpenSettingsSheet()
+        // Custom: the Mihon library screen is replaced by the NAS-style library (no settings sheet)
     }
 
+    // Custom: library in the same style as the NAS browser
     @Composable
     override fun Content() {
+        mihon.feature.nas.NasLibraryContent()
+    }
+
+    @Suppress("unused")
+    @Composable
+    private fun MihonLibraryContent() {
         val navigator = LocalNavigator.currentOrThrow
         val context = LocalContext.current
         val scope = rememberCoroutineScope()
