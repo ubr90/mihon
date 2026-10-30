@@ -11,6 +11,7 @@ import eu.kanade.tachiyomi.ui.more.DownloadQueueState
 import mihon.icons.materialsymbols.MaterialSymbols
 import mihon.icons.materialsymbols.rounded.Explore
 import mihon.icons.materialsymbols.rounded.Refresh
+import mihon.icons.materialsymbols.rounded.Schedule
 import mihon.icons.materialsymbols.rounded.DragHandle
 import mihon.icons.materialsymbols.automirroredrounded.Help
 import mihon.icons.materialsymbols.automirroredrounded.Label
@@ -38,6 +39,7 @@ fun MoreScreen(
     onIncognitoModeChange: (Boolean) -> Unit,
     onClickUpdates: () -> Unit,
     onClickBrowse: () -> Unit,
+    onClickHistory: () -> Unit,
     onClickDownloadQueue: () -> Unit,
     onClickCategories: () -> Unit,
     onClickStats: () -> Unit,
@@ -88,7 +90,14 @@ fun MoreScreen(
 
             item { HorizontalDivider() }
 
-            // Custom: updates and browse were moved here from the tab bar
+            // Custom: updates, browse and history were moved here from the tab bar
+            item {
+                TextPreferenceWidget(
+                    title = stringResource(MR.strings.label_recent_manga),
+                    icon = MaterialSymbols.Rounded.Schedule,
+                    onPreferenceClick = onClickHistory,
+                )
+            }
             item {
                 TextPreferenceWidget(
                     title = stringResource(MR.strings.label_recent_updates),

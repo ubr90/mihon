@@ -2,6 +2,7 @@ package mihon.feature.nas
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -98,6 +99,7 @@ import mihon.icons.materialsymbols.automirroredrounded.ArrowBack
 import mihon.icons.materialsymbols.rounded.Book
 import mihon.icons.materialsymbols.rounded.Code
 import mihon.icons.materialsymbols.rounded.DragHandle
+import mihon.icons.materialsymbols.rounded.Mobile
 import mihon.icons.materialsymbols.rounded.Refresh
 import mihon.icons.materialsymbols.rounded.Settings
 import mihon.icons.materialsymbols.rounded.Storage
@@ -124,6 +126,8 @@ class NasBrowserScreen(
     private val startPath: String? = null,
     // Grid settings to use ("library", "album_<id>"); null = NAS settings (+ per-folder lock)
     private val gridProfileId: String? = null,
+    // Custom: the local tab (folders copied to the phone), top level = the picked local folder
+    private val localTab: Boolean = false,
 ) : Screen() {
 
     @Composable
@@ -132,7 +136,30 @@ class NasBrowserScreen(
         val context = LocalContext.current
         val viewModel = metroViewModel<NasBrowserViewModel>()
         val state by viewModel.state.collectAsState()
-        LaunchedEffect(Unit) { viewModel.start(if (inTab) null else startPath) }
+        LaunchedEffect(Unit) {
+            viewModel.start(
+                when {
+                    localTab -> NasLocal.ROOT
+                    inTab -> null
+                    else -> startPath
+                },
+            )
+        }
+        // Local copies added, finished or removed: list again (local tab) and recolor tiles
+        val localVersion by NasLocal.version.collectAsState()
+        LaunchedEffect(localVersion) {
+            if (localVersion > 0 && (localTab || NasLocal.work(state.currentPath ?: "") != null)) viewModel.reload()
+        }
+        val pickLocalFolder = androidx.activity.compose.rememberLauncherForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.OpenDocumentTree(),
+        ) { uri ->
+            if (uri != null) {
+                NasRuntime.scope.launch {
+                    NasLocal.setFolder(context, uri)
+                    viewModel.reload()
+                }
+            }
+        }
         val thumbOnlyVersion by NasRuntime.thumbs.version.collectAsState()
         val metaVersion by NasRuntime.meta.version.collectAsState()
         // Tiles reload when a thumbnail or metadata (ComicInfo) changes
@@ -151,14 +178,20 @@ class NasBrowserScreen(
 
         BackHandler(enabled = state.stack.size > 1) { viewModel.goUp() }
         if (inTab) {
-            LaunchedEffect(state.stack.size) { NasRuntime.stackDepth.value = state.stack.size }
+            LaunchedEffect(state.stack.size) {
+                if (localTab) NasRuntime.localDepth.value = state.stack.size else NasRuntime.stackDepth.value = state.stack.size
+            }
         }
 
         // Grid settings: the folder's own when "only this folder" is locked, otherwise the shared NAS ones
         val lockedDirs by CoverGridSettings.nasLocked.collectAsState()
         val gridProfile = remember(state.currentPath, state.entries, lockedDirs) {
-            if (gridProfileId != null) {
-                CoverGridSettings.profileById(gridProfileId)
+            if (localTab) {
+                CoverGridSettings.profileById("local")
+            } else if (gridProfileId != null) {
+                // A series opened from the library or an album: its volumes have their own grid settings,
+                // separate from the series list ("library_in", "album_<id>_in")
+                CoverGridSettings.profileById(CoverGridSettings.innerProfileId(gridProfileId))
             } else {
                 CoverGridSettings.nasProfileFor(state.currentPath)
             }
@@ -169,11 +202,20 @@ class NasBrowserScreen(
             thumbVersion = thumbVersion,
             nameMode = nameMode,
             gridProfile = gridProfile,
-            lockable = gridProfileId == null,
+            lockable = gridProfileId == null && !localTab,
+            localTab = localTab,
             showBack = !inTab || state.stack.size > 1,
             onBack = { if (state.stack.size > 1) viewModel.goUp() else if (!inTab) navigator.pop() },
             onRefresh = viewModel::refresh,
-            onOpenSettings = { viewModel.showSettings(true) },
+            onOpenSettings = {
+                if (localTab) {
+                    runCatching { pickLocalFolder.launch(null) }
+                } else {
+                    viewModel.showSettings(true)
+                }
+            },
+            onSaveLocal = viewModel::saveLocal,
+            onDeleteLocal = viewModel::deleteLocal,
             onOpen = viewModel::open,
             onSetFolderThumb = viewModel::setFolderThumbnail,
             onFolderLongPress = viewModel::onFolderLongPress,
@@ -185,7 +227,15 @@ class NasBrowserScreen(
             AlertDialog(
                 onDismissRequest = viewModel::dismissLibraryPrompt,
                 title = { Text(fileName(prompt.entry.path)) },
-                text = { Text(if (prompt.inLibrary) "서재에서 제거할까요?" else "서재에 추가할까요?") },
+                text = {
+                    Text(
+                        when {
+                            !prompt.inLibrary -> "서재에 추가할까요?"
+                            NasLocal.work(prompt.entry.path) != null -> "서재에서 제거할까요?\n폰에 저장한 로컬 파일도 삭제돼요."
+                            else -> "서재에서 제거할까요?"
+                        },
+                    )
+                },
                 confirmButton = {
                     TextButton(onClick = { viewModel.confirmLibrary(prompt) }) {
                         Text(if (prompt.inLibrary) "서재에서 제거" else "서재에 추가")
@@ -299,6 +349,11 @@ class NasBrowserViewModel(
         started = true
         standalone = startPath != null
         when {
+            // Local tab: the folder copied to the phone, works without NAS settings
+            startPath == NasLocal.ROOT -> {
+                _state.update { it.copy(stack = listOf(NasLocal.ROOT)) }
+                reload()
+            }
             !settings.isConfigured -> {
                 _state.update { it.copy(loading = false) }
                 showSettings(true)
@@ -374,6 +429,14 @@ class NasBrowserViewModel(
 
     /** Refresh button: list again, then take this folder's thumbnails from the NAS backup (overwriting). */
     fun refresh() {
+        // Local tab top level: read the local folder again (copies added or removed outside the app)
+        if (_state.value.currentPath == NasLocal.ROOT) {
+            viewModelScope.launch {
+                withContext(Dispatchers.IO) { NasLocal.rescan() }
+                reload()
+            }
+            return
+        }
         _state.value.currentPath?.let { RemoteZip.forgetFolder(it) }
         probed.clear()
         reload(restoreFromBackup = true)
@@ -381,7 +444,7 @@ class NasBrowserViewModel(
 
     fun reload(restoreFromBackup: Boolean = false) {
         val path = _state.value.currentPath ?: return
-        if (!settings.isConfigured) return
+        if (!settings.isConfigured && path != NasLocal.ROOT && !NasLocal.isComplete(path)) return
         _state.update { it.copy(loading = true, error = null) }
         viewModelScope.launch {
             try {
@@ -568,20 +631,59 @@ class NasBrowserViewModel(
                     val manga = networkToLocalManga(NasSource.mangaFor(folder).toDomainManga(NasSource.SOURCE_ID))
                     if (prompt.inLibrary) {
                         updateManga.awaitUpdateFavorite(manga.id, false)
+                        // Custom: a series removed from the library loses its phone copy too
+                        NasLocal.delete(folder)
                     } else {
-                        syncChaptersWithSource.await(NasSource.chaptersFor(folder), manga, NasSource)
-                        // Library cover = the folder's NAS thumbnail
-                        thumbs.get(folder, folder = true)?.inputStream()?.use { coverCache.setCustomCoverToCache(manga, it) }
-                        updateManga.awaitUpdateCoverLastModified(manga.id)
-                        updateManga.awaitUpdateFavorite(manga.id, true)
-                        // Author, summary and genres from ComicInfo.xml (if restored from the PC tool)
-                        updateMangaFromRemote(NasSource, manga, fetchDetails = true)
+                        addToLibrary(manga, folder)
                     }
                 }
                 eventChannel.send(NasEvent.Message(if (prompt.inLibrary) "서재에서 제거했어요" else "서재에 추가했어요"))
             } catch (e: Exception) {
                 eventChannel.send(NasEvent.Message("실패: ${e.message}"))
             }
+        }
+    }
+
+    private suspend fun addToLibrary(manga: tachiyomi.domain.manga.model.Manga, folder: String) {
+        syncChaptersWithSource.await(NasSource.chaptersFor(folder), manga, NasSource)
+        // Library cover = the folder's NAS thumbnail
+        thumbs.get(folder, folder = true)?.inputStream()?.use { coverCache.setCustomCoverToCache(manga, it) }
+        updateManga.awaitUpdateCoverLastModified(manga.id)
+        updateManga.awaitUpdateFavorite(manga.id, true)
+        // Author, summary and genres from ComicInfo.xml (if restored from the PC tool)
+        updateMangaFromRemote(NasSource, manga, fetchDetails = true)
+    }
+
+    /** Long-press "로컬에 저장": copies the series' archives to the local folder and adds it to the library. */
+    fun saveLocal(entry: NasEntry) {
+        viewModelScope.launch {
+            if (!NasLocal.isConfigured) {
+                eventChannel.send(NasEvent.Message("로컬 탭의 설정(톱니)에서 저장할 폴더를 먼저 지정하세요"))
+                return@launch
+            }
+            try {
+                val ok = withContext(Dispatchers.IO) {
+                    val chapters = NasSource.chaptersFor(entry.path)
+                    if (chapters.isEmpty()) return@withContext false
+                    val manga = networkToLocalManga(NasSource.mangaFor(entry.path).toDomainManga(NasSource.SOURCE_ID))
+                    if (!manga.favorite) addToLibrary(manga, entry.path)
+                    NasLocal.enqueue(entry.path)
+                    true
+                }
+                eventChannel.send(
+                    NasEvent.Message(if (ok) "로컬에 저장을 시작했어요 · 서재에 추가됨" else "zip 파일이 없는 폴더예요"),
+                )
+            } catch (e: Exception) {
+                eventChannel.send(NasEvent.Message("저장 실패: ${e.message}"))
+            }
+        }
+    }
+
+    /** Long-press "로컬에서 삭제": removes only the phone copy (the library entry stays and reads from the NAS). */
+    fun deleteLocal(entry: NasEntry) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { NasLocal.delete(entry.path) }
+            eventChannel.send(NasEvent.Message("로컬 파일을 지웠어요"))
         }
     }
 
@@ -939,10 +1041,13 @@ private fun NasBrowserContent(
     thumbVersion: Long,
     nameMode: Int,
     lockable: Boolean,
+    localTab: Boolean,
     showBack: Boolean,
     onBack: () -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
+    onSaveLocal: (NasEntry) -> Unit,
+    onDeleteLocal: (NasEntry) -> Unit,
     onOpen: (NasEntry) -> Unit,
     onSetFolderThumb: (NasEntry) -> Unit,
     onFolderLongPress: (NasEntry) -> Unit,
@@ -959,7 +1064,10 @@ private fun NasBrowserContent(
             TopAppBar(
                 title = {
                     Text(
-                        text = state.currentPath?.let { fileName(it) }?.ifEmpty { null } ?: "NAS",
+                        text = when {
+                            state.currentPath == NasLocal.ROOT -> "로컬"
+                            else -> state.currentPath?.let { fileName(it) }?.ifEmpty { null } ?: if (localTab) "로컬" else "NAS"
+                        },
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -999,7 +1107,24 @@ private fun NasBrowserContent(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            val localProgress by NasLocal.progress.collectAsState()
             when {
+                localTab && !NasLocal.isConfigured -> Column(
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text("다운받은 만화를 보관할 폰의 폴더를 지정하세요", textAlign = TextAlign.Center)
+                    TextButton(onClick = onOpenSettings) { Text("로컬 폴더 지정하기") }
+                }
+                localTab && state.currentPath == NasLocal.ROOT && state.entries.isEmpty() && !state.loading -> Text(
+                    "로컬에 저장한 작품이 없어요\nNAS·앨범·서재에서 작품 폴더를 길게 눌러 \"로컬에 저장\"을 고르세요",
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .align(Alignment.Center)
+                        .padding(24.dp),
+                )
                 state.loading && state.entries.isEmpty() -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                 state.error != null -> Column(
                     modifier = Modifier
@@ -1065,12 +1190,32 @@ private fun NasBrowserContent(
                                 onClick = { onOpen(entry) },
                                 onSetFolderThumb = { onSetFolderThumb(entry) },
                                 onFolderLongPress = { onFolderLongPress(entry) },
+                                onSaveLocal = { onSaveLocal(entry) },
+                                onDeleteLocal = { onDeleteLocal(entry) },
                                 onDeleteThumb = { onDeleteThumb(entry) },
                                 onRestoreThumb = { onRestoreThumb(entry) },
                                 modifier = modifier,
                             )
                         }
                     }
+                }
+            }
+            // Custom: progress of the copy to the phone (local tab)
+            if (localTab) {
+                localProgress?.let { text ->
+                    Text(
+                        text = text,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(12.dp)
+                            .clip(MaterialTheme.shapes.small)
+                            .background(MaterialTheme.colorScheme.primaryContainer)
+                            .padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
                 }
             }
         }
@@ -1133,12 +1278,16 @@ private fun NasTile(
     onClick: () -> Unit,
     onSetFolderThumb: () -> Unit,
     onFolderLongPress: () -> Unit,
+    onSaveLocal: () -> Unit,
+    onDeleteLocal: () -> Unit,
     onDeleteThumb: () -> Unit,
     onRestoreThumb: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    val localVersion by NasLocal.version.collectAsState()
+    val localWork = remember(entry.path, localVersion) { if (entry.isDirectory) NasLocal.work(entry.path) else null }
     val thumb: File? = remember(entry.path, thumbVersion) {
         NasRuntime.thumbs.get(entry.path, folder = entry.isDirectory)
     }
@@ -1192,6 +1341,23 @@ private fun NasTile(
                             ).show()
                         },
                     )
+                    // Custom: copy the series to the phone (zip check happens next), or remove the copy
+                    DropdownMenuItem(
+                        text = { Text(if (localWork?.complete == true) "로컬에 저장 (새 권 받기)" else "로컬에 저장") },
+                        onClick = {
+                            menu = false
+                            onSaveLocal()
+                        },
+                    )
+                    if (localWork != null) {
+                        DropdownMenuItem(
+                            text = { Text("로컬에서 삭제") },
+                            onClick = {
+                                menu = false
+                                onDeleteLocal()
+                            },
+                        )
+                    }
                     // Library entry only for folders that have a thumbnail (zip check happens next)
                     if (thumb != null) {
                         DropdownMenuItem(
@@ -1232,12 +1398,20 @@ private fun NasTile(
             Text(
                 text = shownName,
                 style = MaterialTheme.typography.bodySmall,
+                color = if (localWork?.complete == true) localTitleColor() else androidx.compose.ui.graphics.Color.Unspecified,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
             )
         }
     }
+}
+
+/** Custom: title color of series saved on the phone (soft sky blue, readable in light and dark themes). */
+@Composable
+fun localTitleColor(): androidx.compose.ui.graphics.Color {
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    return if (dark) androidx.compose.ui.graphics.Color(0xFF8CC8F2) else androidx.compose.ui.graphics.Color(0xFF4A9EDB)
 }
 
 @Composable
@@ -1461,6 +1635,28 @@ data object NasTab : eu.kanade.presentation.util.Tab {
             index = 5u,
             title = "NAS",
             icon = androidx.compose.ui.graphics.vector.rememberVectorPainter(MaterialSymbols.Rounded.Storage),
+        )
+
+    @Composable
+    override fun Content() {
+        screen.Content()
+    }
+}
+
+/**
+ * Custom: series copied to the phone, browsed like the NAS (top level = the picked local folder).
+ * Sits where the history tab was; history moved to "More".
+ */
+data object LocalTab : eu.kanade.presentation.util.Tab {
+
+    private val screen = NasBrowserScreen(inTab = true, localTab = true)
+
+    override val options: cafe.adriel.voyager.navigator.tab.TabOptions
+        @Composable
+        get() = cafe.adriel.voyager.navigator.tab.TabOptions(
+            index = 8u,
+            title = "로컬",
+            icon = androidx.compose.ui.graphics.vector.rememberVectorPainter(MaterialSymbols.Rounded.Mobile),
         )
 
     @Composable

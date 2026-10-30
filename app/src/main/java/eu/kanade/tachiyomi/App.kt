@@ -54,6 +54,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.launch
 import logcat.AndroidLogcatLogger
 import logcat.LogPriority
 import logcat.LogcatLogger
@@ -200,6 +201,15 @@ class App : Application(), DefaultLifecycleObserver, SingletonImageLoader.Factor
         }
 
         initializeMigrator()
+
+        // Custom: read the NAS thumbnail/metadata index in the background, so the first NAS screen opens at once
+        mihon.feature.nas.NasRuntime.scope.launch {
+            runCatching {
+                mihon.feature.nas.NasRuntime.thumbs
+                mihon.feature.nas.NasRuntime.meta
+                mihon.feature.nas.NasLocal.load()
+            }
+        }
     }
 
     private fun initializeMigrator() {

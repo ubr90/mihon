@@ -116,7 +116,11 @@ class NasLibraryViewModel(
     }
 
     fun remove(manga: Manga) {
-        viewModelScope.launch(Dispatchers.IO) { updateManga.awaitUpdateFavorite(manga.id, false) }
+        viewModelScope.launch(Dispatchers.IO) {
+            updateManga.awaitUpdateFavorite(manga.id, false)
+            // Custom: removing from the library also deletes the phone copy
+            NasLocal.delete(manga.url)
+        }
     }
 
     private val thumbRequested = mutableSetOf<String>()
@@ -385,6 +389,9 @@ private fun NasLibraryTile(
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    var confirmRemove by remember { mutableStateOf(false) }
+    val localVersion by NasLocal.version.collectAsState()
+    val localWork = remember(manga.url, localVersion) { NasLocal.work(manga.url) }
     val thumb: File? = remember(manga.url, thumbVersion) { NasRuntime.thumbs.get(manga.url, folder = true) }
     LaunchedEffect(manga.url, thumb == null) {
         if (thumb == null) onNeedThumb()
@@ -442,15 +449,49 @@ private fun NasLibraryTile(
                         ).show()
                     },
                 )
+                // Custom: copy to the phone (already in the library, so only the copy starts)
                 DropdownMenuItem(
-                    text = { Text("서재에서 제거") },
+                    text = { Text(if (localWork?.complete == true) "로컬에 저장 (새 권 받기)" else "로컬에 저장") },
                     onClick = {
                         menu = false
-                        onRemove()
-                        Toast.makeText(context, "서재에서 제거했어요", Toast.LENGTH_SHORT).show()
+                        if (!NasLocal.isConfigured) {
+                            Toast.makeText(context, "로컬 탭의 설정(톱니)에서 저장할 폴더를 먼저 지정하세요", Toast.LENGTH_LONG).show()
+                        } else {
+                            NasRuntime.scope.launch { NasLocal.enqueue(manga.url) }
+                            Toast.makeText(context, "로컬에 저장을 시작했어요", Toast.LENGTH_SHORT).show()
+                        }
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (localWork != null) "서재에서 제거 (로컬 파일도 삭제)" else "서재에서 제거") },
+                    onClick = {
+                        menu = false
+                        if (localWork != null) {
+                            confirmRemove = true
+                        } else {
+                            onRemove()
+                            Toast.makeText(context, "서재에서 제거했어요", Toast.LENGTH_SHORT).show()
+                        }
                     },
                 )
             }
+        }
+        if (confirmRemove) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { confirmRemove = false },
+                title = { Text(manga.title) },
+                text = { Text("서재에서 제거하면 폰에 저장한 로컬 파일도 삭제돼요.") },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = {
+                        confirmRemove = false
+                        onRemove()
+                        Toast.makeText(context, "서재에서 제거하고 로컬 파일을 지웠어요", Toast.LENGTH_SHORT).show()
+                    }) { Text("제거") }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { confirmRemove = false }) { Text("취소") }
+                },
+            )
         }
         val name = when {
             thumb == null -> manga.title
@@ -462,6 +503,8 @@ private fun NasLibraryTile(
             Text(
                 text = name,
                 style = MaterialTheme.typography.bodySmall,
+                // Custom: series saved on the phone get a sky-blue title
+                color = if (localWork?.complete == true) localTitleColor() else androidx.compose.ui.graphics.Color.Unspecified,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),

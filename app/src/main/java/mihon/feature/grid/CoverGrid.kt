@@ -86,9 +86,19 @@ object CoverGridSettings {
      */
     fun profileById(id: String?): CoverGridProfile = when {
         id == "nas" -> nas
-        id != null && id.startsWith("album_") -> albumProfile(id.removePrefix("album_"))
-        else -> chapter
+        id == null || id == "chapter" || id == "library" -> chapter
+        id.startsWith("album_") -> albumProfile(id.removePrefix("album_"))
+        // Custom: other screens with their own look ("library_in", "local", ...)
+        else -> synchronized(namedProfiles) { namedProfiles.getOrPut(id) { CoverGridProfile(id, prefs) } }
     }
+
+    private val namedProfiles = HashMap<String, CoverGridProfile>()
+
+    /**
+     * Profile of the volumes inside a series, separate from the series list it was opened from:
+     * "library" -> "library_in", "album_<id>" -> "album_<id>_in".
+     */
+    fun innerProfileId(listId: String): String = if (listId.endsWith("_in")) listId else "${listId}_in"
 
     /** Each album keeps its own grid look. */
     fun albumProfile(id: String): CoverGridProfile =

@@ -72,6 +72,7 @@ data object MoreTab : Tab {
             onIncognitoModeChange = { viewModel.incognitoMode = it },
             onClickUpdates = { tabNavigator.current = eu.kanade.tachiyomi.ui.updates.UpdatesTab },
             onClickBrowse = { tabNavigator.current = eu.kanade.tachiyomi.ui.browse.BrowseTab },
+            onClickHistory = { tabNavigator.current = eu.kanade.tachiyomi.ui.history.HistoryTab },
             onClickDownloadQueue = { navigator.push(DownloadQueueScreen) },
             onClickCategories = { navigator.push(CategoryScreen()) },
             onClickStats = { navigator.push(StatsScreen()) },

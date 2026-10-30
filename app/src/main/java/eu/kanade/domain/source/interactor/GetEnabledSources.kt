@@ -26,7 +26,8 @@ class GetEnabledSources(
             repository.getSources(),
         ) { pinnedSourceIds, enabledLanguages, disabledSources, lastUsedSource, sources ->
             sources
-                .filter { it.lang in enabledLanguages || it.isLocal() }
+                // Custom: Mihon's own local source is hidden (the local tab replaces it)
+                .filter { it.lang in enabledLanguages && !it.isLocal() }
                 .filterNot { it.id.toString() in disabledSources }
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
                 .flatMap {

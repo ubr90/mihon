@@ -31,7 +31,7 @@ object NasRuntime {
     val settings by lazy { NasSettings(app) }
     val dav by lazy { NasWebDav(network.client, settings) }
     val thumbs by lazy { NasThumbStore(app) }
-    val meta by lazy { NasMetaStore(app).also { it.migrate(thumbs.archivePaths()) } }
+    val meta by lazy { NasMetaStore(app) }
 
     /** Depth of the NAS tab's folder stack (the home screen leaves "back" to the NAS tab while > 1). */
     val stackDepth = kotlinx.coroutines.flow.MutableStateFlow(0)
@@ -42,6 +42,9 @@ object NasRuntime {
 
     /** NAS tab: scroll position (first item, offset) per folder, kept while the app is running. */
     val scrollPositions = java.util.concurrent.ConcurrentHashMap<String, Pair<Int, Int>>()
+
+    /** Depth of the local tab's folder stack (same use as [stackDepth]). */
+    val localDepth = kotlinx.coroutines.flow.MutableStateFlow(0)
 
     /** Album tab: an album is open (back goes to the album list). */
     val albumOpen = kotlinx.coroutines.flow.MutableStateFlow(false)

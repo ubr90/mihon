@@ -72,7 +72,8 @@ object HomeScreen : Screen() {
         // Custom: favorites tab; updates and browse moved into "More"
         mihon.feature.nas.FavoritesTab,
         LibraryTab,
-        HistoryTab,
+        // Custom: local tab (series saved on the phone) where history was; history moved into "More"
+        mihon.feature.nas.LocalTab,
         MoreTab,
     )
 
@@ -144,7 +145,8 @@ object HomeScreen : Screen() {
             // Custom: the tab menu hides itself while the NAS tab is open (☰ shows it again)
             LaunchedEffect(tabNavigator.current) {
                 mihon.feature.grid.NavBarToggle.autoHidden.value = tabNavigator.current is mihon.feature.nas.NasTab ||
-                    tabNavigator.current is mihon.feature.nas.AlbumTab
+                    tabNavigator.current is mihon.feature.nas.AlbumTab ||
+                    tabNavigator.current is mihon.feature.nas.LocalTab
             }
 
             val goToLibraryTab = { tabNavigator.current = LibraryTab }
@@ -155,7 +157,12 @@ object HomeScreen : Screen() {
             val nasHandlesBack = tabNavigator.current is mihon.feature.nas.NasTab && nasDepth > 1
             val albumOpen by mihon.feature.nas.NasRuntime.albumOpen.collectAsState()
             val albumHandlesBack = tabNavigator.current is mihon.feature.nas.AlbumTab && albumOpen
-            BackHandler(enabled = tabNavigator.current != LibraryTab && !nasHandlesBack && !albumHandlesBack, onBack = goToLibraryTab)
+            val localDepth by mihon.feature.nas.NasRuntime.localDepth.collectAsState()
+            val localHandlesBack = tabNavigator.current is mihon.feature.nas.LocalTab && localDepth > 1
+            BackHandler(
+                enabled = tabNavigator.current != LibraryTab && !nasHandlesBack && !albumHandlesBack && !localHandlesBack,
+                onBack = goToLibraryTab,
+            )
 
             LaunchedEffect(Unit) {
                 launch {

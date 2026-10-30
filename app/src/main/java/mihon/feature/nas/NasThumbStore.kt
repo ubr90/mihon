@@ -32,34 +32,18 @@ class NasThumbStore(context: Context) {
         json.decodeFromString(indexSerializer, indexFile.readText()).toMutableMap()
     }.getOrDefault(mutableMapOf())
 
-    /**
-     * Folders that hold archives, as paths with the "[memo]" part of their own name removed.
-     * Only these folders are matched without the memo, so "강철 [E북]" and "강철 [E-book]" are the same.
-     */
-    private val leaves: MutableSet<String> = java.util.Collections.synchronizedSet(mutableSetOf())
+    // Custom (2026-10-31): the one-time renaming of old thumbnail names ran on every start and froze the
+    // NAS tab on large libraries; it is done, so only the index is read now. Leaf learning is no longer
+    // needed (every folder's "[memo]" is ignored), the calls are kept as no-ops.
 
-    init {
-        learnLeaves(index.values.toList())
-        migrateKeys()
-    }
+    /** No longer needed (every folder's memo is ignored); kept so callers stay simple. */
+    fun markLeaf(@Suppress("UNUSED_PARAMETER") folderPath: String) = Unit
 
-    private fun learnFrom(item: Item) {
-        if (!item.folder) leaves += canonDir(parentPath(item.path.substringBefore('#')), forceLast = true)
-    }
-
-    /** Remembers folders that contain archives (from a listing or a backup index). */
-    fun markLeaf(folderPath: String) {
-        leaves += canonDir(folderPath, forceLast = true)
-    }
-
-    /** Memo-free path of [folderPath] treated as a folder that holds archives. */
+    /** Memo-free path of [folderPath]. */
     fun canonAsLeaf(folderPath: String): String = canonDir(folderPath, forceLast = true)
 
-    /** Shallow archives first, so a folder above another archive folder is known before the one below it. */
-    fun learnLeaves(items: List<Item>) = items
-        .filter { !it.folder }
-        .sortedBy { it.path.count { c -> c == '/' } }
-        .forEach { learnFrom(it) }
+    /** No longer needed; kept as a no-op. */
+    fun learnLeaves(@Suppress("UNUSED_PARAMETER") items: List<Item>) = Unit
 
     /**
      * Folder path with the "[memo]" removed from every folder that directly holds archives
@@ -73,21 +57,6 @@ class NasThumbStore(context: Context) {
             .let { if (segments.isEmpty()) "/" else it }
     }
 
-    /** Previous rule (memo removed only from folders holding archives); used to move old metadata files. */
-    private fun legacyCanonDir(path: String, forceLast: Boolean): String {
-        val segments = path.trim('/').split('/').filter { it.isNotEmpty() }
-        var current = ""
-        segments.forEachIndexed { i, segment ->
-            val stripped = "$current/${stripMemo(segment)}"
-            current = if (i > 0 && ((forceLast && i == segments.lastIndex) || stripped in leaves)) {
-                stripped
-            } else {
-                "$current/$segment"
-            }
-        }
-        return current.ifEmpty { "/" }
-    }
-
     /**
      * Path used for matching and for the backup on the NAS: the memo of folders holding archives is ignored,
      * so "강철 [E북]" and "강철 [E-book]" are the same. Archive names and the TOC part stay as they are.
@@ -96,35 +65,6 @@ class NasThumbStore(context: Context) {
         '#' in path -> canon(path.substringBefore('#'), folder = false) + "#" + path.substringAfter('#')
         !folder -> childPath(canonDir(parentPath(path), forceLast = true), fileName(path))
         else -> canonDir(path, forceLast = false)
-    }
-
-    /** Archive path under the previous rule (see [legacyCanonDir]). */
-    fun legacyCanonZip(path: String): String =
-        childPath(legacyCanonDir(parentPath(path), forceLast = true), fileName(path))
-
-    /** Old files were named from the exact path; rename them to the memo-free key once. */
-    @Synchronized
-    private fun migrateKeys() {
-        var changed = false
-        index.entries.toList().forEach { (k, item) ->
-            val nk = rawKey(canon(item.path, item.folder), item.folder)
-            if (nk != k) {
-                val from = File(dir, "$k.jpg")
-                val to = File(dir, "$nk.jpg")
-                if (from.exists()) {
-                    if (to.exists()) from.delete() else from.renameTo(to)
-                }
-                index.remove(k)
-                index[nk] = item
-                changed = true
-            }
-        }
-        if (changed) saveIndex()
-    }
-
-    /** Archive paths known to the phone (for moving metadata files to the new names). */
-    fun archivePaths(): List<String> = synchronized(this) {
-        index.values.filter { !it.folder && '#' !in it.path }.map { it.path }
     }
 
     /** Bumped on every change so the UI reloads tiles. */
@@ -160,7 +100,6 @@ class NasThumbStore(context: Context) {
     ) {
         val data = if (alreadyThumbnail) imageBytes else downscale(imageBytes) ?: error("이미지를 읽을 수 없음")
         val item = Item(path, folder)
-        learnFrom(item)
         val k = key(path, folder)
         // Drop a copy saved under the exact name before the folder was known to hold archives
         rawKey(path, folder).takeIf { it != k }?.let { old ->
@@ -214,13 +153,6 @@ class NasThumbStore(context: Context) {
         /** "강철 [E북]" → "강철". A name that is only a memo ("[ㄱ]") stays as it is. */
         fun stripMemo(name: String): String =
             name.replace(memoRegex, " ").trim().replace(Regex("""\s+"""), " ").ifEmpty { name }
-
-        /** Earlier app rule (memo removed from the archive's own folder only); used to move old files. */
-        fun oldCanonZipPath(zipPath: String): String {
-            val parent = parentPath(zipPath)
-            val stripped = if (parent == "/") parent else childPath(parentPath(parent), stripMemo(fileName(parent)))
-            return childPath(stripped, fileName(zipPath))
-        }
 
         fun downscale(bytes: ByteArray): ByteArray? {
             val maxSide = NasRuntime.settings.thumbSize.coerceIn(200, 2000)

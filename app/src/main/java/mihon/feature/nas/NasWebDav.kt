@@ -57,7 +57,9 @@ class NasWebDav(
         return builder.build()
     }
 
-    fun list(path: String): List<NasEntry> {
+    /** Lists a folder; a series copied to the phone (and the local tab's top level) is listed from the phone. */
+    fun list(path: String, allowLocal: Boolean = true): List<NasEntry> {
+        if (allowLocal) NasLocal.list(path)?.let { return it }
         val body = """<?xml version="1.0" encoding="utf-8"?>
             |<d:propfind xmlns:d="DAV:"><d:prop><d:resourcetype/><d:getcontentlength/><d:getlastmodified/></d:prop></d:propfind>
         """.trimMargin()
@@ -147,6 +149,8 @@ class NasWebDav(
      * Returns the bytes and the total size of the file when the server reports it.
      */
     fun getRange(path: String, range: String): Pair<ByteArray, Long?> {
+        // Custom: archives copied to the phone are read there (works offline)
+        runCatching { NasLocal.readRange(path, range) }.getOrNull()?.let { return it }
         val request = Request.Builder()
             .url(url(path))
             .header("Range", "bytes=$range")
@@ -162,6 +166,34 @@ class NasWebDav(
         val contentRange = response.header("Content-Range")
         if (contentRange != null) return contentRange.substringAfterLast('/').toLongOrNull()
         return response.body.contentLength().takeIf { response.code == 200 && it >= 0 }
+    }
+
+    /** Client for whole-file downloads: no overall time limit (archives can be gigabytes). */
+    private val downloadClient: OkHttpClient by lazy {
+        client.newBuilder()
+            .callTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+            .readTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
+    /** Streams a whole file into [out]; [onBytes] gets the bytes written so far. */
+    fun download(path: String, out: java.io.OutputStream, onBytes: (Long) -> Unit) {
+        val request = Request.Builder().url(url(path)).build()
+        downloadClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+            response.body.byteStream().use { input ->
+                val buffer = ByteArray(256 * 1024)
+                var total = 0L
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    out.write(buffer, 0, n)
+                    total += n
+                    onBytes(total)
+                }
+                out.flush()
+            }
+        }
     }
 
     fun put(path: String, bytes: ByteArray, contentType: String = "application/octet-stream") {

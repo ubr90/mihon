@@ -656,19 +656,45 @@ class NasAlbumViewModel(
                     val manga = networkToLocalManga(NasSource.mangaFor(work.path).toDomainManga(NasSource.SOURCE_ID))
                     if (manga.favorite) {
                         updateManga.awaitUpdateFavorite(manga.id, false)
+                        // Custom: removing from the library also deletes the phone copy
+                        NasLocal.delete(work.path)
                         false
                     } else {
-                        syncChaptersWithSource.await(NasSource.chaptersFor(work.path), manga, NasSource)
-                        thumbs.get(work.path, folder = true)?.inputStream()?.use { coverCache.setCustomCoverToCache(manga, it) }
-                        updateManga.awaitUpdateCoverLastModified(manga.id)
-                        updateManga.awaitUpdateFavorite(manga.id, true)
-                        updateMangaFromRemote(NasSource, manga, fetchDetails = true)
+                        addToLibrary(manga, work.path)
                         true
                     }
                 }
                 eventChannel.send(AlbumEvent.Message(if (added) "서재에 추가했어요" else "서재에서 제거했어요"))
             } catch (e: Exception) {
                 eventChannel.send(AlbumEvent.Message("실패: ${e.message}"))
+            }
+        }
+    }
+
+    private suspend fun addToLibrary(manga: tachiyomi.domain.manga.model.Manga, folder: String) {
+        syncChaptersWithSource.await(NasSource.chaptersFor(folder), manga, NasSource)
+        thumbs.get(folder, folder = true)?.inputStream()?.use { coverCache.setCustomCoverToCache(manga, it) }
+        updateManga.awaitUpdateCoverLastModified(manga.id)
+        updateManga.awaitUpdateFavorite(manga.id, true)
+        updateMangaFromRemote(NasSource, manga, fetchDetails = true)
+    }
+
+    /** Custom: "로컬에 저장" copies the series to the phone and adds it to the library. */
+    fun saveLocal(work: AlbumWork) {
+        viewModelScope.launch {
+            if (!NasLocal.isConfigured) {
+                eventChannel.send(AlbumEvent.Message("로컬 탭의 설정(톱니)에서 저장할 폴더를 먼저 지정하세요"))
+                return@launch
+            }
+            try {
+                withContext(Dispatchers.IO) {
+                    val manga = networkToLocalManga(NasSource.mangaFor(work.path).toDomainManga(NasSource.SOURCE_ID))
+                    if (!manga.favorite) addToLibrary(manga, work.path)
+                    NasLocal.enqueue(work.path)
+                }
+                eventChannel.send(AlbumEvent.Message("로컬에 저장을 시작했어요 · 서재에 추가됨"))
+            } catch (e: Exception) {
+                eventChannel.send(AlbumEvent.Message("저장 실패: ${e.message}"))
             }
         }
     }
@@ -1269,6 +1295,7 @@ private fun AlbumScreen(
                     },
                     onNeedThumb = { viewModel.ensureThumb(it.path, it.firstZip) },
                     onToggleLibrary = viewModel::toggleLibrary,
+                    onSaveLocal = viewModel::saveLocal,
                     onOpenInNas = onOpenInNas,
                 )
             }
@@ -1464,6 +1491,7 @@ private fun AlbumGrid(
     onOpen: (AlbumWork) -> Unit,
     onNeedThumb: (AlbumWork) -> Unit,
     onToggleLibrary: (AlbumWork) -> Unit,
+    onSaveLocal: (AlbumWork) -> Unit,
     onOpenInNas: (AlbumWork) -> Unit,
 ) {
     val listState = key(albumId) { rememberLazyListState() }
@@ -1500,6 +1528,7 @@ private fun AlbumGrid(
                     onClick = { onOpen(work) },
                     onNeedThumb = { onNeedThumb(work) },
                     onToggleLibrary = { onToggleLibrary(work) },
+                    onSaveLocal = { onSaveLocal(work) },
                     onOpenInNas = { onOpenInNas(work) },
                     modifier = modifier,
                 )
@@ -1519,11 +1548,14 @@ private fun AlbumTile(
     onClick: () -> Unit,
     onNeedThumb: () -> Unit,
     onToggleLibrary: () -> Unit,
+    onSaveLocal: () -> Unit,
     onOpenInNas: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
     var menu by remember { mutableStateOf(false) }
+    val localVersion by NasLocal.version.collectAsState()
+    val localWork = remember(work.path, localVersion) { NasLocal.work(work.path) }
     val thumb: File? = remember(work.path, thumbVersion) { NasRuntime.thumbs.get(work.path, folder = true) }
     LaunchedEffect(work.path, thumb == null) {
         if (thumb == null) onNeedThumb()
@@ -1560,17 +1592,6 @@ private fun AlbumTile(
                     modifier = Modifier.size(40.dp),
                 )
             }
-            Text(
-                "${work.zipCount}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(4.dp)
-                    .clip(MaterialTheme.shapes.extraSmall)
-                    .background(MaterialTheme.colorScheme.primary)
-                    .padding(horizontal = 4.dp),
-            )
             DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                 DropdownMenuItem(
                     text = { Text("NAS 탭에서 열기") },
@@ -1593,7 +1614,14 @@ private fun AlbumTile(
                     },
                 )
                 DropdownMenuItem(
-                    text = { Text("서재에 추가/제거") },
+                    text = { Text(if (localWork?.complete == true) "로컬에 저장 (새 권 받기)" else "로컬에 저장") },
+                    onClick = {
+                        menu = false
+                        onSaveLocal()
+                    },
+                )
+                DropdownMenuItem(
+                    text = { Text(if (localWork != null) "서재에 추가/제거 (제거 시 로컬 파일도 삭제)" else "서재에 추가/제거") },
                     onClick = {
                         menu = false
                         onToggleLibrary()
@@ -1611,6 +1639,7 @@ private fun AlbumTile(
             Text(
                 text = name,
                 style = MaterialTheme.typography.bodySmall,
+                color = if (localWork?.complete == true) localTitleColor() else androidx.compose.ui.graphics.Color.Unspecified,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(top = 2.dp),
